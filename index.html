@@ -7,7 +7,7 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://unpkg.com/recharts@2.5.0/umd/Recharts.js"></script>
+
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #F6F3EE; font-family: "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
@@ -17,8 +17,7 @@ body { background: #F6F3EE; font-family: "Apple SD Gothic Neo", "Noto Sans KR", 
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useRef, useEffect } = React;
-const _Recharts = window.Recharts || {};
-const { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } = _Recharts;
+
 
 const C = {
   bg: "#F6F3EE", card: "#FFFFFF", cardAlt: "#FAF8F5", border: "#E8E2D8",
