@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DietDesign</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #F6F3EE; font-family: "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect } = React;
+const { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } = Recharts;
+
+const C = {
+  bg: "#F6F3EE", card: "#FFFFFF", cardAlt: "#FAF8F5", border: "#E8E2D8",
+  accent: "#9B7651", accentLight: "#EDE4D8", accentDark: "#7A5C3A",
+  text: "#2A2018", mid: "#7A6D62", light: "#B0A599",
+  success: "#5C8A68", danger: "#B85450", warn: "#C4924A",
+  female: "#C47A8A", male: "#5A7A9B",
+};
+
+const COACH_PW = "coach1234";
+const TODAY = new Date().toISOString().slice(0, 10);
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8LKermR-eSp23YxYKDsJHwh15jDfuadEXSCI62Als9qRwn6UazuBV1MI11VR6-Ok_/exec";
+
+const DEFAULT_PROMPT = `당신은 다음 코칭 철학을 따르는 코치의 보조 AI입니다.
+
+핵심 원칙:
+- 체중 수치보다 식욕 안정감이 가장 중요한 지표입니다
+- 음식을 줄이는 것이 아니라 충분히 먹는 방향입니다 (채소 100g + 밥 150~200g 기준)
+- 식후 포만감이 충분히 느껴지고 오래 유지되는지가 핵심입니다
+- 완벽한 실천보다 꾸준한 기록이 우선입니다
+- 생리 주기에 따른 식욕 변화는 자연스러운 현상으로 바라봅니다
+
+절대 금지:
+- 칼로리, 단백질, 탄수화물, 지방 수치 언급 금지
+- "덜 드세요", "줄이세요" 방향의 피드백 금지
+- 체중 증가를 부정적으로 표현하는 것 금지`;
+
+const TIME_OPTIONS = ["05:00","05:30","06:00","06:30","07:00","07:30","08:00","08:30","09:00","09:30","10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30","20:00","20:30","21:00","21:30","22:00","22:30","23:00","23:30","00:00","00:30","01:00","01:30","02:00"];
+
+// ── Google Sheets API ─────────────────────────────────────────────────────────
+async function sheetGet(sheetName) {
+  try {
+    const res = await fetch(`${SCRIPT_URL}?sheet=${encodeURIComponent(sheetName)}`);
+    const data = await res.json();
+    return data.data || [];
+  } catch { return []; }
+}
+
+async function sheetWrite(sheetName, row, values) {
+  try {
+    await fetch(SCRIPT_URL, {
+      method: "POST",
+      body: JSON.stringify({ action: "write", sheet: sheetName, row, values }),
+    });
+    return true;
+  } catch { return false; }
+}
+
+// members 시트: [id, name, gender, age, goal, startWeight, targetWeight, pin, memo]
+async function loadMembers() {
+  const rows = await sheetGet("members");
+  return rows.filter(r => r[0]).map(r => ({
+    id: String(r[0]), name: String(r[1]), gender: String(r[2]),
+    age: Number(r[3]), goal: String(r[4]), startWeight: Number(r[5]),
+    targetWeight: Number(r[6]), pin: String(r[7]), memo: String(r[8] || ""),
+  }));
+}
+
+async function saveMembers(members) {
+  // Clear by overwriting all rows
+  for (let i = 0; i < members.length; i++) {
+    const m = members[i];
+    await sheetWrite("members", i + 1, [m.id, m.name, m.gender, m.age, m.goal, m.startWeight, m.targetWeight, m.pin, m.memo]);
+  }
+}
+
+// records 시트: [memberId, date, json_blob]
+async function loadRecords(memberId) {
+  const rows = await sheetGet("records");
+  const result = {};
+  rows.filter(r => String(r[0]) === memberId).forEach(r => {
+    try { result[String(r[1])] = JSON.parse(String(r[2])); } catch {}
+  });
+  return result;
+}
+
+async function saveRecord(memberId, date, record) {
+  // Find existing row or append
+  const rows = await sheetGet("records");
+  const idx = rows.findIndex(r => String(r[0]) === memberId && String(r[1]) === date);
+  const rowNum = idx >= 0 ? idx + 1 : rows.length + 1;
+  await sheetWrite("records", rowNum, [memberId, date, JSON.stringify(record)]);
+}
+
+// ── Gemini ────────────────────────────────────────────────────────────────────
+async function callGemini(apiKey, prompt) {
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    try { return JSON.parse(text.replace(/```json|```/g, "").trim()); }
+    catch { return { raw: text }; }
+  } catch { return null; }
+}
+
+// ── UI Primitives ─────────────────────────────────────────────────────────────
+function Btn({ children, onClick, variant = "primary", size = "md", disabled, fullWidth, style = {} }) {
+  const sz = size === "sm" ? { padding: "5px 12px", fontSize: 12 } : { padding: "10px 22px", fontSize: 14 };
+  const vs = {
+    primary: { background: C.accent, color: "#fff", border: "none" },
+    outline: { background: "transparent", color: C.accent, border: `1.5px solid ${C.accent}` },
+    ghost: { background: "transparent", color: C.mid, border: "none" },
+    danger: { background: C.danger, color: "#fff", border: "none" },
+  };
+  return (
+    <button onClick={onClick} disabled={disabled}
+      style={{ ...sz, ...vs[variant], borderRadius: 8, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, fontFamily: "inherit", fontWeight: 600, transition: "opacity 0.15s", width: fullWidth ? "100%" : undefined, ...style }}>
+      {children}
+    </button>
+  );
+}
+
+function Card({ children, style = {} }) {
+  return <div style={{ background: C.card, borderRadius: 14, border: `1px solid ${C.border}`, padding: 20, ...style }}>{children}</div>;
+}
+
+function Tag({ children, color = C.accentLight, textColor = C.accent }) {
+  return <span style={{ background: color, color: textColor, borderRadius: 20, padding: "3px 10px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{children}</span>;
+}
+
+function Input({ value, onChange, placeholder, type = "text", style = {} }) {
+  return (
+    <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} type={type}
+      style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 13, color: C.text, background: C.card, outline: "none", fontFamily: "inherit", width: "100%", boxSizing: "border-box", ...style }} />
+  );
+}
+
+function Select({ value, onChange, options, placeholder }) {
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 13, color: value ? C.text : C.light, background: C.card, outline: "none", fontFamily: "inherit", width: "100%", boxSizing: "border-box" }}>
+      <option value="">{placeholder || "선택"}</option>
+      {options.map(o => <option key={o} value={o}>{o}</option>)}
+    </select>
+  );
+}
+
+function Slider({ value, onChange, label }) {
+  const color = value >= 7 ? C.success : value >= 4 ? C.warn : C.danger;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ fontSize: 12, color: C.mid, minWidth: 68 }}>{label}</span>
+      <input type="range" min={1} max={10} value={value} onChange={e => onChange(Number(e.target.value))} style={{ flex: 1, accentColor: color }} />
+      <span style={{ fontSize: 14, fontWeight: 800, color, minWidth: 18, textAlign: "right" }}>{value}</span>
+    </div>
+  );
+}
+
+function ConfirmDelete({ onConfirm, onCancel }) {
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <span style={{ fontSize: 12, color: C.danger }}>삭제할까요?</span>
+      <Btn size="sm" variant="danger" onClick={onConfirm}>확인</Btn>
+      <Btn size="sm" variant="ghost" onClick={onCancel}>취소</Btn>
+    </div>
+  );
+}
+
+function Spinner() {
+  return <div style={{ textAlign: "center", padding: 40, color: C.light, fontSize: 13 }}>불러오는 중...</div>;
+}
+
+// ── Sleep Bar ─────────────────────────────────────────────────────────────────
+function SleepBar({ sleep, compact }) {
+  const HOURS = ["7","8","9","10","11","12","1","2","3","4","5","6","7","8","9","10","11","12","1"];
+  const toIdx = (t) => {
+    if (!t) return -1;
+    const [h, m] = t.split(":").map(Number);
+    return (h < 7 ? h + 17 : h - 7) + m / 60;
+  };
+  const si = toIdx(sleep?.start), ei = toIdx(sleep?.end);
+  if (compact) {
+    return (
+      <div style={{ position: "relative", height: 8, background: C.cardAlt, borderRadius: 4, overflow: "hidden", border: `1px solid ${C.border}` }}>
+        {si >= 0 && ei >= 0 && <div style={{ position: "absolute", left: `${(si / 18) * 100}%`, width: `${Math.max(((ei - si) / 18) * 100, 2)}%`, height: "100%", background: C.accent, opacity: 0.7 }} />}
+      </div>
+    );
+  }
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <div style={{ minWidth: 400 }}>
+        <div style={{ display: "flex", marginBottom: 3 }}>
+          {HOURS.map((h, i) => <div key={i} style={{ flex: 1, textAlign: "center", fontSize: 9, color: C.light }}>{h}</div>)}
+        </div>
+        <div style={{ position: "relative", height: 12, background: C.cardAlt, borderRadius: 6, overflow: "hidden", border: `1px solid ${C.border}` }}>
+          {si >= 0 && ei >= 0 && <div style={{ position: "absolute", left: `${(si / 18) * 100}%`, width: `${Math.max(((ei - si) / 18) * 100, 2)}%`, height: "100%", background: C.accent, opacity: 0.75 }} />}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+          <span style={{ fontSize: 10, color: C.mid }}>취침 <b>{sleep?.start || "-"}</b></span>
+          <span style={{ fontSize: 10, color: C.mid }}>기상 <b>{sleep?.end || "-"}</b></span>
+          <span style={{ fontSize: 10, color: C.accent, fontWeight: 700 }}>{sleep?.total || "-"}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Weekly View ───────────────────────────────────────────────────────────────
+function WeeklyView({ member, records, onUpdate, apiKey, coachPrompt }) {
+  const [report, setReport] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const [editingComment, setEditingComment] = useState(null);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(TODAY);
+    d.setDate(d.getDate() - (6 - i));
+    return d.toISOString().slice(0, 10);
+  });
+  const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
+
+  const saveComment = async (date) => {
+    setSaving(true);
+    const record = records[date] || {};
+    const updated = { ...record, coachComment: commentDraft };
+    await onUpdate(date, updated);
+    setEditingComment(null);
+    setSaving(false);
+  };
+
+  const generateReport = async () => {
+    if (!apiKey) return alert("API 키를 먼저 입력해주세요.");
+    setGenerating(true);
+    const weekData = days.map(d => {
+      const r = records[d];
+      if (!r) return null;
+      return { date: d, weight: r.weight, sleep: r.sleep?.total, period: r.period, meals: r.meals?.map(m => ({ food: m.food, hunger: m.hungerBefore, satiety: m.satietyAfter })), exercise: r.exercise?.map(e => e.note) };
+    }).filter(Boolean);
+    const prompt = `${coachPrompt}\n\n회원: ${member.name}, 성별: ${member.gender === "female" ? "여성" : "남성"}, 목표: ${member.goal}, 특이사항: ${member.memo}\n최근 7일:\n${JSON.stringify(weekData)}\n\nJSON만 답하세요:\n{"appetite_pattern":"식욕 안정 패턴 2-3문장","satiety_trend":"포만감 추이 1-2문장","period_relation":${member.gender === "female" ? '"생리주기 연관성 1문장"' : "null"},"sleep_relation":"수면 연관성 1문장","exercise_consistency":"운동 일관성 1문장","coach_suggestion":"다음주 코칭 참고 2-3문장","highlight":"이번주 잘한 점 1문장"}`;
+    const result = await callGemini(apiKey, prompt);
+    setReport(result);
+    setGenerating(false);
+  };
+
+  const tdBase = (isToday) => ({ padding: "6px 4px", borderBottom: `1px solid ${C.border}`, textAlign: "center", background: isToday ? "#FFFDF9" : "transparent", verticalAlign: "top" });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 580 }}>
+            <thead>
+              <tr>
+                <th style={{ padding: "10px 12px", fontSize: 11, color: C.mid, fontWeight: 700, textAlign: "left", borderBottom: `1px solid ${C.border}`, background: C.cardAlt, minWidth: 56 }}>항목</th>
+                {days.map((d, i) => {
+                  const isToday = d === TODAY;
+                  const hasRecord = !!records[d];
+                  return (
+                    <th key={d} style={{ padding: "8px 4px", fontSize: 11, textAlign: "center", borderBottom: `1px solid ${C.border}`, background: isToday ? C.accentLight : C.cardAlt }}>
+                      <div style={{ color: isToday ? C.accent : C.mid, fontWeight: 700, fontSize: 12 }}>{DAY_LABELS[i]}</div>
+                      <div style={{ fontSize: 9, color: C.light, marginTop: 1 }}>{d.slice(5)}</div>
+                      <div style={{ width: 5, height: 5, borderRadius: "50%", background: hasRecord ? C.success : C.border, margin: "3px auto 0" }} />
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { label: "수면", render: (r) => r?.sleep?.total ? <div><div style={{ fontSize: 10, fontWeight: 700, color: C.text, marginBottom: 3 }}>{r.sleep.total}</div><SleepBar sleep={r.sleep} compact /></div> : null },
+                { label: "체중", female: false, render: (r, i) => {
+                  if (!r?.weight) return null;
+                  const prevD = days[i - 1];
+                  const prevW = prevD ? records[prevD]?.weight : null;
+                  const diff = prevW ? (r.weight - prevW).toFixed(1) : null;
+                  return <div><div style={{ fontSize: 13, fontWeight: 800, color: C.accent }}>{r.weight}</div>{diff && <div style={{ fontSize: 9, color: parseFloat(diff) > 0 ? C.danger : C.success }}>{parseFloat(diff) > 0 ? "+" : ""}{diff}</div>}</div>;
+                }},
+                { label: "허리", render: (r) => r?.waist ? <span style={{ fontSize: 11, color: C.text }}>{r.waist}</span> : null },
+                { label: "화장실", render: (r) => r?.toilet != null ? <span style={{ fontSize: 11, color: C.text }}>{r.toilet}</span> : null },
+                ...(member.gender === "female" ? [{ label: "생리", render: (r) => r?.period ? <span style={{ fontSize: 10, color: C.female }}>{r.period}</span> : null }] : []),
+                { label: "포만감", render: (r) => {
+                  const vals = r?.meals?.map(m => m.satietyAfter).filter(Boolean) || [];
+                  if (!vals.length) return null;
+                  const avg = (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1);
+                  return <span style={{ fontSize: 13, fontWeight: 800, color: parseFloat(avg) >= 7 ? C.success : parseFloat(avg) >= 4 ? C.warn : C.danger }}>{avg}</span>;
+                }},
+                { label: "운동", render: (r) => r?.exercise?.length ? r.exercise.map((ex, i) => <div key={i} style={{ fontSize: 9, color: C.success, lineHeight: 1.4 }}>{ex.note}</div>) : null },
+                { label: "식사", render: (r) => r?.meals?.length ? r.meals.map((m, i) => (
+                  <div key={i} style={{ marginBottom: 4, paddingBottom: 3, borderBottom: i < r.meals.length - 1 ? `1px dotted ${C.border}` : "none" }}>
+                    <div style={{ fontSize: 9, color: C.light }}>{m.time}</div>
+                    <div style={{ fontSize: 9, color: C.text, lineHeight: 1.3 }}>{m.food}</div>
+                    <span style={{ fontSize: 9, color: C.warn }}>공{m.hungerBefore}</span>
+                    <span style={{ fontSize: 9, color: C.light }}>/</span>
+                    <span style={{ fontSize: 9, color: C.success }}>포{m.satietyAfter}</span>
+                    {m.photo && <span style={{ fontSize: 9 }}> 📷</span>}
+                  </div>
+                )) : null },
+              ].map(({ label, render }) => (
+                <tr key={label}>
+                  <td style={{ padding: "8px 12px", fontSize: 11, color: label === "생리" ? C.female : C.mid, fontWeight: 600, borderBottom: `1px solid ${C.border}`, background: C.cardAlt }}>{label}</td>
+                  {days.map((d, i) => {
+                    const r = records[d];
+                    const content = render(r, i);
+                    return <td key={d} style={tdBase(d === TODAY)}>{content || <span style={{ fontSize: 10, color: C.border }}>-</span>}</td>;
+                  })}
+                </tr>
+              ))}
+              {/* 코멘트 행 */}
+              <tr>
+                <td style={{ padding: "8px 12px", fontSize: 11, color: C.accent, fontWeight: 600, background: C.cardAlt, verticalAlign: "top" }}>코멘트</td>
+                {days.map(d => {
+                  const r = records[d];
+                  const isEditing = editingComment === d;
+                  return (
+                    <td key={d} style={{ padding: "6px 4px", verticalAlign: "top", background: d === TODAY ? "#FFFDF9" : "transparent" }}>
+                      {isEditing ? (
+                        <div>
+                          <textarea value={commentDraft} onChange={e => setCommentDraft(e.target.value)}
+                            style={{ width: "100%", minHeight: 56, fontSize: 10, border: `1px solid ${C.border}`, borderRadius: 6, padding: 4, fontFamily: "inherit", resize: "none", boxSizing: "border-box" }} autoFocus />
+                          <div style={{ display: "flex", gap: 3, marginTop: 4 }}>
+                            <Btn size="sm" onClick={() => saveComment(d)} disabled={saving} style={{ fontSize: 10, padding: "3px 7px" }}>{saving ? "저장중" : "저장"}</Btn>
+                            <Btn size="sm" variant="ghost" onClick={() => setEditingComment(null)} style={{ fontSize: 10, padding: "3px 7px" }}>취소</Btn>
+                          </div>
+                        </div>
+                      ) : (
+                        <div onClick={() => r && (setEditingComment(d), setCommentDraft(r?.coachComment || ""))} style={{ cursor: r ? "pointer" : "default", minHeight: 20 }}>
+                          {r?.coachComment ? <div style={{ fontSize: 9, color: C.accentDark, lineHeight: 1.5 }}>{r.coachComment}</div> : r ? <div style={{ fontSize: 9, color: C.border }}>+ 추가</div> : null}
+                        </div>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* 체중 그래프 */}
+      {(() => {
+        const chartData = days.map((d, i) => ({ date: DAY_LABELS[i], weight: records[d]?.weight, waist: records[d]?.waist })).filter(d => d.weight);
+        return chartData.length > 1 ? (
+          <Card>
+            <div style={{ fontWeight: 700, fontSize: 13, color: C.text, marginBottom: 12 }}>체중 & 허리 추이</div>
+            <ResponsiveContainer width="100%" height={140}>
+              <LineChart data={chartData} margin={{ top: 5, right: 10, left: -28, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.light }} />
+                <YAxis tick={{ fontSize: 10, fill: C.light }} domain={["auto", "auto"]} />
+                <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                <ReferenceLine y={member.targetWeight} stroke={C.success} strokeDasharray="4 4" label={{ value: "목표", fontSize: 9, fill: C.success, position: "right" }} />
+                <Line type="monotone" dataKey="weight" stroke={C.accent} strokeWidth={2.5} dot={{ r: 4, fill: C.accent }} name="체중(kg)" />
+                <Line type="monotone" dataKey="waist" stroke={C.female} strokeWidth={2} dot={{ r: 3 }} strokeDasharray="4 2" name="허리(cm)" />
+              </LineChart>
+            </ResponsiveContainer>
+          </Card>
+        ) : null;
+      })()}
+
+      {/* AI 리포트 */}
+      <Card style={{ border: `1.5px solid #C0DAC8` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: C.success }}>✦ 주간 AI 리포트 (코치 전용)</div>
+          <Btn size="sm" variant="outline" onClick={generateReport} disabled={generating || !apiKey} style={{ borderColor: C.success, color: C.success }}>
+            {generating ? "생성 중..." : "리포트 생성"}
+          </Btn>
+        </div>
+        {!apiKey && <p style={{ fontSize: 12, color: C.light, margin: 0 }}>API 키를 먼저 입력해주세요.</p>}
+        {report && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {report.highlight && <div style={{ background: "#EFF7F1", borderRadius: 8, padding: "10px 14px" }}><div style={{ fontSize: 11, fontWeight: 700, color: C.success, marginBottom: 4 }}>✨ 이번 주 잘한 점</div><p style={{ fontSize: 13, color: C.text, margin: 0 }}>{report.highlight}</p></div>}
+            {[["식욕 안정 패턴", "appetite_pattern"], ["포만감 추이", "satiety_trend"], ...(member.gender === "female" ? [["생리 주기 연관성", "period_relation"]] : []), ["수면 연관성", "sleep_relation"], ["운동 일관성", "exercise_consistency"], ["다음 주 코칭 참고", "coach_suggestion"]].map(([label, key]) =>
+              report[key] ? <div key={key}><div style={{ fontSize: 11, fontWeight: 700, color: C.mid, marginBottom: 3 }}>{label}</div><p style={{ fontSize: 13, color: C.text, margin: 0, lineHeight: 1.6 }}>{report[key]}</p></div> : null
+            )}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ── Coach Dashboard ───────────────────────────────────────────────────────────
+function CoachDashboard({ members, setMembers, apiKey, setApiKey, coachPrompt, setCoachPrompt }) {
+  const [selected, setSelected] = useState(null);
+  const [memberRecords, setMemberRecords] = useState({});
+  const [loadingRecords, setLoadingRecords] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [promptDraft, setPromptDraft] = useState(coachPrompt);
+  const [apiDraft, setApiDraft] = useState("");
+  const [showApiInput, setShowApiInput] = useState(false);
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [newMember, setNewMember] = useState({ name: "", gender: "female", age: "", goal: "", startWeight: "", targetWeight: "", pin: "", memo: "" });
+  const [deletingMemberId, setDeletingMemberId] = useState(null);
+  const [editingMemberId, setEditingMemberId] = useState(null);
+  const [editMemberDraft, setEditMemberDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const member = members.find(m => m.id === selected);
+
+  const selectMember = async (id) => {
+    setSelected(id);
+    setLoadingRecords(true);
+    const records = await loadRecords(id);
+    setMemberRecords(records);
+    setLoadingRecords(false);
+  };
+
+  const updateRecord = async (date, record) => {
+    const m = members.find(m => m.id === selected);
+    await saveRecord(m.id, date, record);
+    setMemberRecords(prev => ({ ...prev, [date]: record }));
+  };
+
+  const addMember = async () => {
+    if (!newMember.name || !newMember.pin) return alert("이름과 PIN은 필수입니다.");
+    setSaving(true);
+    const id = "m" + Date.now();
+    const m = { ...newMember, id, age: Number(newMember.age), startWeight: Number(newMember.startWeight), targetWeight: Number(newMember.targetWeight) };
+    const updated = [...members, m];
+    await saveMembers(updated);
+    setMembers(updated);
+    setNewMember({ name: "", gender: "female", age: "", goal: "", startWeight: "", targetWeight: "", pin: "", memo: "" });
+    setShowAddMember(false);
+    setSaving(false);
+  };
+
+  const deleteMember = async (id) => {
+    setSaving(true);
+    const updated = members.filter(m => m.id !== id);
+    await saveMembers(updated);
+    setMembers(updated);
+    setDeletingMemberId(null);
+    setSaving(false);
+  };
+
+  const startEditMember = (e, m) => {
+    e.stopPropagation();
+    setEditingMemberId(m.id);
+    setEditMemberDraft({ name: m.name, gender: m.gender, age: String(m.age), goal: m.goal, startWeight: String(m.startWeight), targetWeight: String(m.targetWeight), pin: m.pin, memo: m.memo || "" });
+  };
+
+  const updateMember = async () => {
+    if (!editMemberDraft.name || !editMemberDraft.pin) return alert("이름과 PIN은 필수입니다.");
+    setSaving(true);
+    const updated = members.map(m => m.id === editingMemberId
+      ? { ...m, ...editMemberDraft, age: Number(editMemberDraft.age), startWeight: Number(editMemberDraft.startWeight), targetWeight: Number(editMemberDraft.targetWeight) }
+      : m
+    );
+    await saveMembers(updated);
+    setMembers(updated);
+    setEditingMemberId(null);
+    setEditMemberDraft(null);
+    setSaving(false);
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 18, color: C.text, display: "flex", alignItems: "center", gap: 10 }}>
+          {selected && member ? (
+            <>
+              <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 22, color: C.mid, padding: 0 }}>←</button>
+              <span>{member.name}</span>
+              <Tag color={member.gender === "female" ? "#F9E8ED" : "#E8EDF5"} textColor={member.gender === "female" ? C.female : C.male}>{member.gender === "female" ? "여성" : "남성"}</Tag>
+            </>
+          ) : "전체 회원"}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setShowApiInput(!showApiInput)}
+            style={{ background: apiKey ? "#EFF7F1" : C.accentLight, border: "none", borderRadius: 20, padding: "5px 12px", fontSize: 11, color: apiKey ? C.success : C.accent, cursor: "pointer", fontWeight: 600, fontFamily: "inherit" }}>
+            {apiKey ? "API ✓" : "API 키"}
+          </button>
+          <Btn size="sm" variant="outline" onClick={() => setShowPrompt(!showPrompt)}>✦ AI 설정</Btn>
+        </div>
+      </div>
+
+      {showApiInput && (
+        <div style={{ background: C.cardAlt, borderRadius: 10, padding: 12, marginBottom: 16, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 12, color: C.mid, marginBottom: 8 }}>Gemini API 키 (메모리에만 저장)</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Input value={apiDraft} onChange={setApiDraft} placeholder="API 키 입력" type="password" />
+            <Btn size="sm" onClick={() => { setApiKey(apiDraft); setShowApiInput(false); }}>저장</Btn>
+          </div>
+        </div>
+      )}
+
+      {showPrompt && (
+        <Card style={{ marginBottom: 16, border: `1.5px solid ${C.accentLight}` }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: C.text, marginBottom: 8 }}>AI 코칭 방향 설정</div>
+          <textarea value={promptDraft} onChange={e => setPromptDraft(e.target.value)}
+            style={{ width: "100%", minHeight: 180, border: `1.5px solid ${C.border}`, borderRadius: 8, padding: 10, fontSize: 12, fontFamily: "inherit", color: C.text, resize: "vertical", boxSizing: "border-box" }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <Btn size="sm" onClick={() => { setCoachPrompt(promptDraft); setShowPrompt(false); }}>저장</Btn>
+            <Btn size="sm" variant="ghost" onClick={() => setShowPrompt(false)}>취소</Btn>
+          </div>
+        </Card>
+      )}
+
+      {/* 회원 목록 */}
+      {!selected && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {members.map(m => {
+            const isEditing = editingMemberId === m.id;
+            return (
+              <div key={m.id}>
+                {isEditing && editMemberDraft ? (
+                  <Card style={{ border: `1.5px solid ${C.accent}` }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: C.text, marginBottom: 14 }}>회원 정보 수정</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                      <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>이름 *</label><Input value={editMemberDraft.name} onChange={v => setEditMemberDraft(f => ({ ...f, name: v }))} placeholder="이름" /></div>
+                      <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>PIN *</label><Input value={editMemberDraft.pin} onChange={v => setEditMemberDraft(f => ({ ...f, pin: v }))} placeholder="PIN 번호" /></div>
+                      <div>
+                        <label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>성별</label>
+                        <select value={editMemberDraft.gender} onChange={e => setEditMemberDraft(f => ({ ...f, gender: e.target.value }))}
+                          style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 13, background: C.card, fontFamily: "inherit", width: "100%" }}>
+                          <option value="female">여성</option>
+                          <option value="male">남성</option>
+                        </select>
+                      </div>
+                      <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>나이</label><Input value={editMemberDraft.age} onChange={v => setEditMemberDraft(f => ({ ...f, age: v }))} placeholder="예: 34" type="number" /></div>
+                      <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>현재 체중 (kg)</label><Input value={editMemberDraft.startWeight} onChange={v => setEditMemberDraft(f => ({ ...f, startWeight: v }))} placeholder="예: 65" type="number" /></div>
+                      <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>목표 체중 (kg)</label><Input value={editMemberDraft.targetWeight} onChange={v => setEditMemberDraft(f => ({ ...f, targetWeight: v }))} placeholder="예: 58" type="number" /></div>
+                    </div>
+                    <div style={{ marginBottom: 10 }}><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>목표</label><Input value={editMemberDraft.goal} onChange={v => setEditMemberDraft(f => ({ ...f, goal: v }))} placeholder="예: 식욕 안정 & 체지방 감량" /></div>
+                    <div style={{ marginBottom: 14 }}><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>특이사항</label><Input value={editMemberDraft.memo} onChange={v => setEditMemberDraft(f => ({ ...f, memo: v }))} placeholder="예: 무릎 주의, 갑상선약 복용" /></div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <Btn size="sm" onClick={updateMember} disabled={saving}>{saving ? "저장 중..." : "저장"}</Btn>
+                      <Btn size="sm" variant="ghost" onClick={() => { setEditingMemberId(null); setEditMemberDraft(null); }}>취소</Btn>
+                    </div>
+                  </Card>
+                ) : (
+                  <Card style={{ cursor: "pointer" }} onClick={() => selectMember(m.id)}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, fontSize: 16, color: C.text }}>{m.name}</span>
+                          <Tag color={m.gender === "female" ? "#F9E8ED" : "#E8EDF5"} textColor={m.gender === "female" ? C.female : C.male}>{m.gender === "female" ? "여" : "남"} {m.age}세</Tag>
+                        </div>
+                        <div style={{ fontSize: 12, color: C.mid, marginBottom: 4 }}>{m.goal}</div>
+                        <div style={{ fontSize: 12, color: C.light }}>목표 {m.targetWeight}kg {m.memo && `· ${m.memo}`}</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        {deletingMemberId === m.id
+                          ? <ConfirmDelete onConfirm={() => deleteMember(m.id)} onCancel={() => setDeletingMemberId(null)} />
+                          : <>
+                            <Btn size="sm" variant="ghost" onClick={e => startEditMember(e, m)}>수정</Btn>
+                            <Btn size="sm" variant="ghost" onClick={e => { e.stopPropagation(); setDeletingMemberId(m.id); }} style={{ color: C.danger }}>삭제</Btn>
+                          </>}
+                      </div>
+                    </div>
+                  </Card>
+                )}
+              </div>
+            );
+          })}
+
+          {/* 회원 추가 */}
+          <div>
+            {!showAddMember ? (
+              <Btn variant="outline" fullWidth onClick={() => setShowAddMember(true)}>+ 회원 추가</Btn>
+            ) : (
+              <Card style={{ border: `1.5px solid ${C.accentLight}` }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: C.text, marginBottom: 14 }}>새 회원 추가</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                  <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>이름 *</label><Input value={newMember.name} onChange={v => setNewMember(f => ({ ...f, name: v }))} placeholder="이름" /></div>
+                  <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>PIN *</label><Input value={newMember.pin} onChange={v => setNewMember(f => ({ ...f, pin: v }))} placeholder="PIN 번호" /></div>
+                  <div>
+                    <label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>성별</label>
+                    <select value={newMember.gender} onChange={e => setNewMember(f => ({ ...f, gender: e.target.value }))}
+                      style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 13, background: C.card, fontFamily: "inherit", width: "100%" }}>
+                      <option value="female">여성</option>
+                      <option value="male">남성</option>
+                    </select>
+                  </div>
+                  <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>나이</label><Input value={newMember.age} onChange={v => setNewMember(f => ({ ...f, age: v }))} placeholder="예: 34" type="number" /></div>
+                  <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>현재 체중 (kg)</label><Input value={newMember.startWeight} onChange={v => setNewMember(f => ({ ...f, startWeight: v }))} placeholder="예: 65" type="number" /></div>
+                  <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>목표 체중 (kg)</label><Input value={newMember.targetWeight} onChange={v => setNewMember(f => ({ ...f, targetWeight: v }))} placeholder="예: 58" type="number" /></div>
+                </div>
+                <div style={{ marginBottom: 10 }}><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>목표</label><Input value={newMember.goal} onChange={v => setNewMember(f => ({ ...f, goal: v }))} placeholder="예: 식욕 안정 & 체지방 감량" /></div>
+                <div style={{ marginBottom: 14 }}><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>특이사항</label><Input value={newMember.memo} onChange={v => setNewMember(f => ({ ...f, memo: v }))} placeholder="예: 무릎 주의, 갑상선약 복용" /></div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Btn size="sm" onClick={addMember} disabled={saving}>{saving ? "저장 중..." : "추가"}</Btn>
+                  <Btn size="sm" variant="ghost" onClick={() => setShowAddMember(false)}>취소</Btn>
+                </div>
+              </Card>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 회원 상세 주간 뷰 */}
+      {selected && member && (
+        <div>
+          <div style={{ fontSize: 12, color: C.light, marginBottom: 16 }}>{member.goal}{member.memo && ` · ${member.memo}`}</div>
+          {loadingRecords ? <Spinner /> : (
+            <WeeklyView member={member} records={memberRecords} onUpdate={updateRecord} apiKey={apiKey} coachPrompt={coachPrompt} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Member Input Form ─────────────────────────────────────────────────────────
+function MemberInputForm({ member, existingRecord, onSave }) {
+  const init = {
+    weight: existingRecord?.weight ?? "", waist: existingRecord?.waist ?? "",
+    sleepStart: existingRecord?.sleep?.start ?? "", sleepEnd: existingRecord?.sleep?.end ?? "",
+    toilet: existingRecord?.toilet ?? "", period: existingRecord?.period ?? "",
+    meals: existingRecord?.meals ? JSON.parse(JSON.stringify(existingRecord.meals)) : [],
+    exercise: existingRecord?.exercise ? JSON.parse(JSON.stringify(existingRecord.exercise)) : [],
+  };
+  const [form, setForm] = useState(init);
+  const [addingMeal, setAddingMeal] = useState(false);
+  const [mealDraft, setMealDraft] = useState({ time: "", food: "", hungerBefore: 5, satietyAfter: 7, photo: null });
+  const [editingMealIdx, setEditingMealIdx] = useState(null);
+  const [deletingMealIdx, setDeletingMealIdx] = useState(null);
+  const [addingEx, setAddingEx] = useState(false);
+  const [exDraft, setExDraft] = useState({ time: "", note: "" });
+  const [editingExIdx, setEditingExIdx] = useState(null);
+  const [deletingExIdx, setDeletingExIdx] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const fileRef = useRef();
+  const editFileRef = useRef();
+
+  const calcSleep = (s, e) => {
+    if (!s || !e) return "";
+    const [sh, sm] = s.split(":").map(Number), [eh, em] = e.split(":").map(Number);
+    let mins = (eh * 60 + em) - (sh * 60 + sm);
+    if (mins < 0) mins += 1440;
+    return `${Math.floor(mins / 60)}시간${mins % 60 > 0 ? ` ${mins % 60}분` : ""}`;
+  };
+
+  const handlePhoto = (e, setter) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setter(f => ({ ...f, photo: ev.target.result }));
+    reader.readAsDataURL(file);
+  };
+
+  const addMeal = () => { if (!mealDraft.food) return; setForm(f => ({ ...f, meals: [...f.meals, { ...mealDraft }] })); setMealDraft({ time: "", food: "", hungerBefore: 5, satietyAfter: 7, photo: null }); setAddingMeal(false); };
+  const saveMealEdit = (idx) => { const meals = [...form.meals]; meals[idx] = { ...meals[idx], ...mealDraft }; setForm(f => ({ ...f, meals })); setEditingMealIdx(null); };
+  const deleteMeal = (idx) => { setForm(f => ({ ...f, meals: f.meals.filter((_, i) => i !== idx) })); setDeletingMealIdx(null); };
+  const addExercise = () => { if (!exDraft.note) return; setForm(f => ({ ...f, exercise: [...f.exercise, { ...exDraft }] })); setExDraft({ time: "", note: "" }); setAddingEx(false); };
+  const saveExEdit = (idx) => { const exercise = [...form.exercise]; exercise[idx] = { ...exDraft }; setForm(f => ({ ...f, exercise })); setEditingExIdx(null); };
+  const deleteExercise = (idx) => { setForm(f => ({ ...f, exercise: f.exercise.filter((_, i) => i !== idx) })); setDeletingExIdx(null); };
+
+  const save = async () => {
+    if (!window.confirm("기록을 저장할까요?")) return;
+    setSaving(true);
+    const total = calcSleep(form.sleepStart, form.sleepEnd);
+    await onSave({ weight: form.weight ? parseFloat(form.weight) : null, waist: form.waist ? parseFloat(form.waist) : null, sleep: { start: form.sleepStart, end: form.sleepEnd, total }, toilet: form.toilet ? parseInt(form.toilet) : null, period: form.period || null, meals: form.meals, exercise: form.exercise, coachComment: existingRecord?.coachComment || "" });
+    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
+  };
+
+  const MealFormUI = ({ draft, setDraft, onSubmit, onCancel, fRef, label }) => (
+    <div style={{ background: C.cardAlt, borderRadius: 10, padding: 14, marginBottom: 12, border: `1px solid ${C.border}` }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10, marginBottom: 10 }}>
+        <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>시간</label><Select value={draft.time} onChange={v => setDraft(d => ({ ...d, time: v }))} options={TIME_OPTIONS} placeholder="시간 선택" /></div>
+        <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>먹은 음식</label><Input value={draft.food} onChange={v => setDraft(d => ({ ...d, food: v }))} placeholder="비빔밥, 된장국" /></div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+        <Slider label="식전 공복감" value={draft.hungerBefore} onChange={v => setDraft(d => ({ ...d, hungerBefore: v }))} />
+        <Slider label="식후 포만감" value={draft.satietyAfter} onChange={v => setDraft(d => ({ ...d, satietyAfter: v }))} />
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <input ref={fRef} type="file" accept="image/*" onChange={e => handlePhoto(e, setDraft)} style={{ display: "none" }} />
+        {draft.photo ? <img src={draft.photo} alt="" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, cursor: "pointer" }} onClick={() => fRef.current?.click()} />
+          : <Btn size="sm" variant="outline" onClick={() => fRef.current?.click()}>📷 사진 올리기</Btn>}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}><Btn size="sm" onClick={onSubmit}>{label}</Btn><Btn size="sm" variant="ghost" onClick={onCancel}>취소</Btn></div>
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {existingRecord?.coachComment && (
+        <div style={{ background: C.accentLight, borderRadius: 12, padding: "14px 16px", border: `1.5px solid ${C.accent}50` }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.accent, marginBottom: 6 }}>코치 코멘트</div>
+          <p style={{ fontSize: 13, color: C.text, margin: 0, lineHeight: 1.7 }}>{existingRecord.coachComment}</p>
+        </div>
+      )}
+      <Card>
+        <div style={{ fontWeight: 700, fontSize: 14, color: C.text, marginBottom: 12 }}>신체 지표</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>체중 (kg)</label><Input value={form.weight} onChange={v => setForm(f => ({ ...f, weight: v }))} placeholder="예: 65.5" type="number" /></div>
+          <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>허리 둘레 (cm)</label><Input value={form.waist} onChange={v => setForm(f => ({ ...f, waist: v }))} placeholder="예: 80" type="number" /></div>
+          <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>취침 시간</label><Select value={form.sleepStart} onChange={v => setForm(f => ({ ...f, sleepStart: v }))} options={TIME_OPTIONS} placeholder="취침 시간" /></div>
+          <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>기상 시간</label><Select value={form.sleepEnd} onChange={v => setForm(f => ({ ...f, sleepEnd: v }))} options={TIME_OPTIONS} placeholder="기상 시간" /></div>
+          <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>화장실 (횟수)</label><Input value={form.toilet} onChange={v => setForm(f => ({ ...f, toilet: v }))} placeholder="예: 1" type="number" /></div>
+          {member.gender === "female" && <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>생리 기록</label><Input value={form.period} onChange={v => setForm(f => ({ ...f, period: v }))} placeholder="예: D+2, D-7" /></div>}
+        </div>
+        {form.sleepStart && form.sleepEnd && <div style={{ marginTop: 12 }}><SleepBar sleep={{ start: form.sleepStart, end: form.sleepEnd, total: calcSleep(form.sleepStart, form.sleepEnd) }} /></div>}
+      </Card>
+
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: C.text }}>식사 기록</div>
+          <Btn size="sm" onClick={() => setAddingMeal(true)}>+ 추가</Btn>
+        </div>
+        {addingMeal && <MealFormUI draft={mealDraft} setDraft={setMealDraft} onSubmit={addMeal} onCancel={() => setAddingMeal(false)} fRef={fileRef} label="추가" />}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {form.meals.map((meal, i) => (
+            <div key={i}>
+              {editingMealIdx === i
+                ? <MealFormUI draft={mealDraft} setDraft={setMealDraft} onSubmit={() => saveMealEdit(i)} onCancel={() => setEditingMealIdx(null)} fRef={editFileRef} label="수정 저장" />
+                : <div style={{ background: C.cardAlt, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}` }}>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, color: C.light }}>{meal.time}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: "3px 0 6px" }}>{meal.food}</div>
+                      <div style={{ display: "flex", gap: 10 }}>
+                        <span style={{ fontSize: 11, color: C.mid }}>공복 <b style={{ color: C.warn }}>{meal.hungerBefore}</b></span>
+                        <span style={{ fontSize: 11, color: C.mid }}>포만 <b style={{ color: C.success }}>{meal.satietyAfter}</b></span>
+                      </div>
+                    </div>
+                    {meal.photo && <img src={meal.photo} alt="" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8 }} />}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    {deletingMealIdx === i
+                      ? <ConfirmDelete onConfirm={() => deleteMeal(i)} onCancel={() => setDeletingMealIdx(null)} />
+                      : <><Btn size="sm" variant="ghost" onClick={() => { setEditingMealIdx(i); setMealDraft({ time: meal.time, food: meal.food, hungerBefore: meal.hungerBefore, satietyAfter: meal.satietyAfter, photo: meal.photo || null }); }}>수정</Btn><Btn size="sm" variant="ghost" onClick={() => setDeletingMealIdx(i)} style={{ color: C.danger }}>삭제</Btn></>}
+                  </div>
+                </div>}
+            </div>
+          ))}
+          {form.meals.length === 0 && !addingMeal && <div style={{ color: C.light, fontSize: 13 }}>식사를 추가해주세요</div>}
+        </div>
+      </Card>
+
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: C.text }}>운동 기록</div>
+          <Btn size="sm" onClick={() => setAddingEx(true)}>+ 추가</Btn>
+        </div>
+        {addingEx && (
+          <div style={{ background: C.cardAlt, borderRadius: 10, padding: 14, marginBottom: 12, border: `1px solid ${C.border}` }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10, marginBottom: 10 }}>
+              <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>시간</label><Select value={exDraft.time} onChange={v => setExDraft(d => ({ ...d, time: v }))} options={TIME_OPTIONS} placeholder="시간 선택" /></div>
+              <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>운동 내용</label><Input value={exDraft.note} onChange={v => setExDraft(d => ({ ...d, note: v }))} placeholder="굿모닝 5x8, 달리기 3km" /></div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}><Btn size="sm" onClick={addExercise}>추가</Btn><Btn size="sm" variant="ghost" onClick={() => setAddingEx(false)}>취소</Btn></div>
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {form.exercise.map((ex, i) => (
+            <div key={i}>
+              {editingExIdx === i
+                ? <div style={{ background: C.cardAlt, borderRadius: 10, padding: 14, border: `1px solid ${C.border}` }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10, marginBottom: 10 }}>
+                    <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>시간</label><Select value={exDraft.time} onChange={v => setExDraft(d => ({ ...d, time: v }))} options={TIME_OPTIONS} placeholder="시간 선택" /></div>
+                    <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>운동 내용</label><Input value={exDraft.note} onChange={v => setExDraft(d => ({ ...d, note: v }))} placeholder="굿모닝 5x8" /></div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}><Btn size="sm" onClick={() => saveExEdit(i)}>수정 저장</Btn><Btn size="sm" variant="ghost" onClick={() => setEditingExIdx(null)}>취소</Btn></div>
+                </div>
+                : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ display: "flex", gap: 14 }}><span style={{ fontSize: 11, color: C.light, minWidth: 40 }}>{ex.time}</span><span style={{ fontSize: 13, color: C.text }}>{ex.note}</span></div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {deletingExIdx === i
+                      ? <ConfirmDelete onConfirm={() => deleteExercise(i)} onCancel={() => setDeletingExIdx(null)} />
+                      : <><Btn size="sm" variant="ghost" onClick={() => { setEditingExIdx(i); setExDraft({ time: ex.time, note: ex.note }); }}>수정</Btn><Btn size="sm" variant="ghost" onClick={() => setDeletingExIdx(i)} style={{ color: C.danger }}>삭제</Btn></>}
+                  </div>
+                </div>}
+            </div>
+          ))}
+          {form.exercise.length === 0 && !addingEx && <div style={{ color: C.light, fontSize: 13 }}>운동을 추가해주세요</div>}
+        </div>
+      </Card>
+
+      <Btn fullWidth onClick={save} disabled={saving} style={{ padding: 14, fontSize: 15 }}>{saving ? "저장 중..." : saved ? "✓ 저장됐어요!" : "기록 저장"}</Btn>
+    </div>
+  );
+}
+
+// ── Member Home ───────────────────────────────────────────────────────────────
+function MemberHome({ member, records, onSave }) {
+  const [tab, setTab] = useState("today");
+  const dates = Object.keys(records).sort().reverse().filter(d => d !== TODAY);
+
+  return (
+    <div>
+      <div style={{ display: "flex", borderBottom: `2px solid ${C.border}`, marginBottom: 20 }}>
+        {[["today", "오늘 기록"], ["history", "지난 기록"]].map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)}
+            style={{ padding: "10px 20px", border: "none", background: "none", cursor: "pointer", fontSize: 14, fontWeight: tab === key ? 700 : 400, color: tab === key ? C.accent : C.mid, borderBottom: `2px solid ${tab === key ? C.accent : "transparent"}`, marginBottom: -2, fontFamily: "inherit" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === "today" && <MemberInputForm member={member} existingRecord={records[TODAY]} onSave={rec => onSave(TODAY, rec)} />}
+      {tab === "history" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {dates.length === 0 ? <div style={{ color: C.light, textAlign: "center", padding: 40 }}>지난 기록이 없어요</div>
+            : dates.map(d => {
+              const r = records[d];
+              return (
+                <Card key={d}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.mid, marginBottom: 10 }}>{d}</div>
+                  <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
+                    {r.weight && <span style={{ fontSize: 13, color: C.mid }}>체중 <b style={{ color: C.accent }}>{r.weight}kg</b></span>}
+                    {r.waist && <span style={{ fontSize: 13, color: C.mid }}>허리 <b>{r.waist}cm</b></span>}
+                    {r.sleep?.total && <span style={{ fontSize: 13, color: C.mid }}>수면 <b>{r.sleep.total}</b></span>}
+                    {r.period && <span style={{ fontSize: 13, color: C.female }}>생리 <b>{r.period}</b></span>}
+                  </div>
+                  {r.meals?.map((m, i) => <div key={i} style={{ fontSize: 12, color: C.text, padding: "5px 0", borderTop: `1px solid ${C.border}` }}><span style={{ color: C.light, marginRight: 8 }}>{m.time}</span>{m.food}<span style={{ color: C.success, marginLeft: 8 }}>포만 {m.satietyAfter}</span></div>)}
+                  {r.exercise?.map((ex, i) => <div key={i} style={{ fontSize: 12, color: C.text, padding: "5px 0", borderTop: `1px solid ${C.border}` }}><span style={{ color: C.light, marginRight: 8 }}>{ex.time}</span>🏃 {ex.note}</div>)}
+                  {r.coachComment && <div style={{ marginTop: 10, background: C.accentLight, borderRadius: 8, padding: "10px 12px" }}><div style={{ fontSize: 11, fontWeight: 700, color: C.accent, marginBottom: 4 }}>코치 코멘트</div><p style={{ fontSize: 12, color: C.text, margin: 0 }}>{r.coachComment}</p></div>}
+                </Card>
+              );
+            })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Login ─────────────────────────────────────────────────────────────────────
+function Login({ onLogin, loading }) {
+  const [name, setName] = useState(""), [pin, setPin] = useState(""), [error, setError] = useState("");
+  const [logoTaps, setLogoTaps] = useState(0);
+  const [showCoach, setShowCoach] = useState(false);
+  const [coachPw, setCoachPw] = useState(""), [coachError, setCoachError] = useState("");
+
+  const handleLogoTap = () => {
+    const next = logoTaps + 1; setLogoTaps(next);
+    if (next >= 5) { setShowCoach(true); setLogoTaps(0); }
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ textAlign: "center", marginBottom: 40 }}>
+        <div onClick={handleLogoTap} style={{ fontFamily: "Georgia, serif", fontSize: 34, fontStyle: "italic", color: C.accent, letterSpacing: 2, cursor: "default", userSelect: "none" }}>DietDesign</div>
+        <div style={{ fontSize: 13, color: C.light, marginTop: 6 }}>코칭 기록 시스템</div>
+      </div>
+      {loading ? <Spinner /> : !showCoach ? (
+        <Card style={{ width: "100%", maxWidth: 340 }}>
+          <div style={{ fontWeight: 700, fontSize: 16, color: C.text, marginBottom: 16 }}>로그인</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>이름</label><Input value={name} onChange={setName} placeholder="이름을 입력하세요" /></div>
+            <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>PIN</label><Input value={pin} onChange={setPin} placeholder="PIN 번호" type="password" /></div>
+            {error && <p style={{ color: C.danger, fontSize: 12, margin: 0 }}>{error}</p>}
+            <Btn fullWidth onClick={() => onLogin("member", name, pin, setError)} style={{ marginTop: 4, padding: 14 }}>로그인</Btn>
+          </div>
+        </Card>
+      ) : (
+        <Card style={{ width: "100%", maxWidth: 340 }}>
+          <button onClick={() => setShowCoach(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.mid, fontSize: 13, marginBottom: 16, padding: 0 }}>← 뒤로</button>
+          <div style={{ fontWeight: 700, fontSize: 16, color: C.text, marginBottom: 16 }}>코치 접속</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div><label style={{ fontSize: 12, color: C.mid, display: "block", marginBottom: 4 }}>비밀번호</label><Input value={coachPw} onChange={setCoachPw} placeholder="코치 비밀번호" type="password" /></div>
+            {coachError && <p style={{ color: C.danger, fontSize: 12, margin: 0 }}>{coachError}</p>}
+            <Btn fullWidth onClick={() => coachPw === COACH_PW ? onLogin("coach", null, null, null) : setCoachError("비밀번호가 올바르지 않습니다.")} style={{ marginTop: 4, padding: 14 }}>접속</Btn>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+function App() {
+  const [members, setMembers] = useState([]);
+  const [session, setSession] = useState(null);
+  const [memberRecords, setMemberRecords] = useState({});
+  const [loadingInit, setLoadingInit] = useState(true);
+  const [apiKey, setApiKey] = useState("");
+  const [coachPrompt, setCoachPrompt] = useState(DEFAULT_PROMPT);
+
+  // 앱 시작시 회원 목록 로드
+  useEffect(() => {
+    loadMembers().then(m => { setMembers(m); setLoadingInit(false); });
+  }, []);
+
+  const handleLogin = async (role, name, pin, setError) => {
+    if (role === "coach") { setSession({ role: "coach" }); return; }
+    const member = members.find(m => m.name === name && m.pin === pin);
+    if (!member) { setError && setError("이름 또는 PIN이 올바르지 않습니다."); return; }
+    // 회원 기록 로드
+    const records = await loadRecords(member.id);
+    setMemberRecords(records);
+    setSession({ role: "member", member });
+  };
+
+  const saveMyRecord = async (date, record) => {
+    await saveRecord(session.member.id, date, record);
+    setMemberRecords(prev => ({ ...prev, [date]: record }));
+  };
+
+  if (!session) return <Login onLogin={handleLogin} loading={loadingInit} />;
+
+  const currentMember = session.role === "member" ? members.find(m => m.id === session.member.id) : null;
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Noto Sans KR', sans-serif" }}>
+      <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ maxWidth: 720, margin: "0 auto", padding: "12px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontFamily: "Georgia, serif", fontSize: 20, fontStyle: "italic", color: C.accent, letterSpacing: 1 }}>DietDesign</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {session.role === "member" && <span style={{ fontSize: 13, color: C.mid }}>{currentMember?.name}님</span>}
+            {session.role === "coach" && <Tag>코치</Tag>}
+            <Btn size="sm" variant="ghost" onClick={() => setSession(null)}>로그아웃</Btn>
+          </div>
+        </div>
+      </div>
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 20px 60px" }}>
+        {session.role === "member" && currentMember && (
+          <MemberHome member={currentMember} records={memberRecords} onSave={saveMyRecord} />
+        )}
+        {session.role === "coach" && (
+          <CoachDashboard members={members} setMembers={setMembers} apiKey={apiKey} setApiKey={setApiKey} coachPrompt={coachPrompt} setCoachPrompt={setCoachPrompt} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>
