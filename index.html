@@ -1,4 +1,4 @@
-<!-- DietDesign v8 -->
+<!-- DietDesign v9 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -38,6 +38,11 @@ function getToday(){
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 }
 const TODAY=getToday();
+function getYesterday(){
+  const d=new Date();d.setDate(d.getDate()-1);
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+const YESTERDAY=getYesterday();
 
 function normalizeDate(raw){
   const s=String(raw||"");
@@ -363,8 +368,8 @@ function RecordForm({member,record,onSave}){
 
       {/* 신체 지표 */}
       <Card>
-        <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>신체 지표</div>
-        <p style={{fontSize:11,color:C.light,marginBottom:12}}>오늘 아침 측정값을 입력해주세요.</p>
+        <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>🌙 수면 + 오늘 아침 측정</div>
+        <p style={{fontSize:11,color:C.light,marginBottom:12}}>어젯밤 수면과 오늘 아침 체중·허리를 입력해주세요.</p>
         <div className="form2col" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>체중 (kg)</div><KInput value={weight} onChange={setWeight} placeholder="예: 65.5" type="number"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>허리 둘레 (cm)</div><KInput value={waist} onChange={setWaist} placeholder="예: 80" type="number"/></div>
@@ -381,10 +386,10 @@ function RecordForm({member,record,onSave}){
       {/* 식사 기록 */}
       <Card>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-          <div style={{fontWeight:700,fontSize:14}}>식사 기록</div>
+          <div style={{fontWeight:700,fontSize:14}}>🍽 어제 ({YESTERDAY}) 식사 기록</div>
           <Btn size="sm" onClick={()=>{setAddingMeal(true);setEditMealIdx(null);}}>+ 추가</Btn>
         </div>
-        <p style={{fontSize:11,color:C.light,marginBottom:12}}>어제 하루 식사를 기록해주세요.</p>
+        <p style={{fontSize:11,color:C.light,marginBottom:12}}>어제 드신 식사와 포만감을 기록해주세요.</p>
         {addingMeal&&(
           <MealForm onSave={m=>{setMeals(p=>[...p,m]);setAddingMeal(false);}} onCancel={()=>setAddingMeal(false)}/>
         )}
@@ -485,10 +490,15 @@ function MemberHome({member,records,onSave}){
       </div>
 
       {tab==="today"&&(
-        // key=TODAY+저장횟수로 저장 후 폼 리마운트하여 최신 데이터 반영
-        <RecordForm key={"today-"+JSON.stringify(Object.keys(records[TODAY]||{}).length)}
-          member={member} record={records[TODAY]}
-          onSave={async rec=>{await onSave(TODAY,rec);}}/>
+        <div>
+          <div style={{background:C.accentL,borderRadius:10,padding:"10px 16px",marginBottom:16,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{fontSize:13,color:C.accentD}}>📅 <b>{TODAY}</b> 아침 기록</span>
+            <span style={{fontSize:11,color:C.mid}}>· 수면/체중은 오늘 아침, 식사는 어제({YESTERDAY}) 기준이에요</span>
+          </div>
+          <RecordForm key={"today-"+JSON.stringify(Object.keys(records[TODAY]||{}).length)}
+            member={member} record={records[TODAY]}
+            onSave={async rec=>{await onSave(TODAY,rec);}}/>
+        </div>
       )}
 
       {tab==="history"&&!histDate&&(
@@ -505,7 +515,7 @@ function MemberHome({member,records,onSave}){
                   <div style={{fontSize:12,color:C.mid,display:"flex",gap:12,flexWrap:"wrap"}}>
                     {r?.weight&&<span>체중 <b style={{color:C.accent}}>{r.weight}kg</b></span>}
                     {r?.sleep?.total&&<span>수면 <b>{r.sleep.total}</b></span>}
-                    {r?.meals?.length>0&&<span>식사 <b>{r.meals.length}끼</b></span>}
+                    {r?.meals?.length>0&&<span>전날 식사 <b>{r.meals.length}끼</b></span>}
                     {r?.exercise?.length>0&&<span>운동 <b>{r.exercise.length}회</b></span>}
                   </div>
                 </div>
@@ -613,7 +623,7 @@ function WeeklyView({member,records,onUpdate,apiKey,coachPrompt}){
                   return<span style={{fontSize:13,fontWeight:800,color:parseFloat(avg)>=7?C.ok:parseFloat(avg)>=4?C.warn:C.danger}}>{avg}</span>;
                 }},
                 {label:"운동",render:r=>r?.exercise?.length?r.exercise.map((ex,i)=><div key={i} style={{fontSize:9,color:C.ok,lineHeight:1.4}}>{ex.note}</div>):null},
-                {label:"식사",render:r=>r?.meals?.length?r.meals.map((m,i)=>(
+                {label:"식사(전날)",render:r=>r?.meals?.length?r.meals.map((m,i)=>(
                   <div key={i} style={{marginBottom:3}}>
                     <div style={{fontSize:9,color:C.light}}>{m.time}</div>
                     <div style={{fontSize:9,color:C.text}}>{m.food}</div>
@@ -660,6 +670,9 @@ function WeeklyView({member,records,onUpdate,apiKey,coachPrompt}){
             </tbody>
           </table>
         </div>
+      <div style={{fontSize:11,color:C.light,padding:"4px 14px 8px",textAlign:"right"}}>
+        * 식사 행은 해당 날짜의 전날 식사 기록입니다
+      </div>
       </Card>
 
       {weights.length>=2&&(()=>{
