@@ -1,3 +1,4 @@
+<!-- DietDesign v4 - 2026.03 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -742,14 +743,14 @@ ${member.personalPrompt}` : "")} />
 
 
 function MemberInputForm({ member, existingRecord, onSave }) {
-  const init = {
-    weight: existingRecord?.weight ?? "", waist: existingRecord?.waist ?? "",
-    sleepStart: existingRecord?.sleep?.start ?? "", sleepEnd: existingRecord?.sleep?.end ?? "",
-    toilet: existingRecord?.toilet ?? "", period: existingRecord?.period ?? "",
-    meals: existingRecord?.meals ? JSON.parse(JSON.stringify(existingRecord.meals)) : [],
-    exercise: existingRecord?.exercise ? JSON.parse(JSON.stringify(existingRecord.exercise)) : [],
-  };
-  const [form, setForm] = useState(init);
+  const buildInit = (rec) => ({
+    weight: rec?.weight ?? "", waist: rec?.waist ?? "",
+    sleepStart: rec?.sleep?.start ?? "", sleepEnd: rec?.sleep?.end ?? "",
+    toilet: rec?.toilet ?? "", period: rec?.period ?? "",
+    meals: rec?.meals ? JSON.parse(JSON.stringify(rec.meals)) : [],
+    exercise: rec?.exercise ? JSON.parse(JSON.stringify(rec.exercise)) : [],
+  });
+  const [form, setForm] = useState(() => buildInit(existingRecord));
   const [addingMeal, setAddingMeal] = useState(false);
   const [mealDraft, setMealDraft] = useState({ time: "", food: "", hungerBefore: 5, satietyAfter: 7, photo: null });
   const [editingMealIdx, setEditingMealIdx] = useState(null);
