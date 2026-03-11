@@ -1,4 +1,4 @@
-<!-- DietDesign v4 - 2026.03 -->
+<!-- DietDesign v6 - 2026.03 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -48,7 +48,10 @@ const C = {
 };
 
 const COACH_PW = "coach1234";
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = (() => {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+})();
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8LKermR-eSp23YxYKDsJHwh15jDfuadEXSCI62Als9qRwn6UazuBV1MI11VR6-Ok_/exec";
 
 const DEFAULT_PROMPT = `당신은 다음 코칭 철학을 따르는 코치의 보조 AI입니다.
@@ -65,7 +68,7 @@ const DEFAULT_PROMPT = `당신은 다음 코칭 철학을 따르는 코치의 �
 - "덜 드세요", "줄이세요" 방향의 피드백 금지
 - 체중 증가를 부정적으로 표현하는 것 금지`;
 
-const TIME_OPTIONS = ["05:00","05:30","06:00","06:30","07:00","07:30","08:00","08:30","09:00","09:30","10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30","20:00","20:30","21:00","21:30","22:00","22:30","23:00","23:30","00:00","00:30","01:00","01:30","02:00"];
+const TIME_OPTIONS = Array.from({length:48},(_,i)=>String(Math.floor(i/2)).padStart(2,"0")+":"+(i%2===0?"00":"30"));
 
 // ── Google Sheets API ─────────────────────────────────────────────────────────
 async function sheetGet(sheetName) {
@@ -109,7 +112,12 @@ async function loadRecords(memberId) {
   const rows = await sheetGet("records");
   const result = {};
   rows.filter(r => String(r[0]) === memberId).forEach(r => {
-    try { result[String(r[1])] = JSON.parse(String(r[2])); } catch {}
+    try {
+      // normalize date: handle ISO timestamp like 2026-03-08T15:00:00.000Z
+      const rawDate = String(r[1]);
+      const dateKey = rawDate.length > 10 ? rawDate.slice(0, 10) : rawDate;
+      result[dateKey] = JSON.parse(String(r[2]));
+    } catch {}
   });
   return result;
 }
@@ -420,7 +428,11 @@ async function loadAllRecords(memberIds) {
   const result = {};
   memberIds.forEach(id => { result[id] = {}; });
   rows.filter(r => r[0] && result[String(r[0])] !== undefined).forEach(r => {
-    try { result[String(r[0])][String(r[1])] = JSON.parse(String(r[2])); } catch {}
+    try {
+      const rawDate = String(r[1]);
+      const dateKey = rawDate.length > 10 ? rawDate.slice(0, 10) : rawDate;
+      result[String(r[0])][dateKey] = JSON.parse(String(r[2]));
+    } catch {}
   });
   return result;
 }
@@ -751,6 +763,8 @@ function MemberInputForm({ member, existingRecord, onSave }) {
     exercise: rec?.exercise ? JSON.parse(JSON.stringify(rec.exercise)) : [],
   });
   const [form, setForm] = useState(() => buildInit(existingRecord));
+  // Re-init form when existingRecord changes (e.g. after save)
+  useEffect(() => { setForm(buildInit(existingRecord)); }, [JSON.stringify(existingRecord)]);
   const [addingMeal, setAddingMeal] = useState(false);
   const [mealDraft, setMealDraft] = useState({ time: "", food: "", hungerBefore: 5, satietyAfter: 7, photo: null });
   const [editingMealIdx, setEditingMealIdx] = useState(null);
