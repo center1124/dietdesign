@@ -1,4 +1,4 @@
-<!-- DietDesign v20 -->
+<!-- DietDesign v21 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -166,7 +166,7 @@ async function callGemini(apiKey,prompt,model){
   try{
     const body={
       contents:[{parts:[{text:prompt}]}],
-      generationConfig:{temperature:0.7,maxOutputTokens:1024}
+      generationConfig:{temperature:0.7,maxOutputTokens:2048}
     };
     const url="https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent?key="+apiKey;
     const res=await fetch(url,{
@@ -181,9 +181,12 @@ async function callGemini(apiKey,prompt,model){
     }
     const data=await res.json();
     const text=(data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts&&data.candidates[0].content.parts[0]&&data.candidates[0].content.parts[0].text)||"{}";
-    var cleaned=text.trim();if(cleaned.slice(0,3).charCodeAt(0)===96&&cleaned.slice(0,7).indexOf("json")>0){cleaned=cleaned.slice(cleaned.indexOf("\n")+1);}if(cleaned.slice(-3).charCodeAt(0)===96){cleaned=cleaned.slice(0,-3);}cleaned=cleaned.trim();
-    try{return JSON.parse(cleaned);}
-    catch{return {raw:text};}
+    try{
+      const jsonMatch=text.match(/\{[\s\S]*\}/);
+      if(jsonMatch){return JSON.parse(jsonMatch[0]);}
+      else if(text.includes('{')){return {raw:"데이터가 너무 길어 분석이 잘렸습니다. 조금 더 짧게 기록하거나 관리자에게 문의하세요.\n\n"+text};}
+      return {raw:text};
+    }catch{return {raw:text};}
   }catch(e){
     console.error("callGemini error",e);
     return {raw:"네트워크 오류: "+e.message};
