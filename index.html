@@ -1,4 +1,4 @@
-<!-- DietDesign v9 -->
+<!-- DietDesign v10 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -20,7 +20,7 @@ input,select,textarea,button{font-family:inherit;}
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const {useState,useEffect,useRef,useCallback} = React;
+const {useState,useEffect,useRef} = React;
 
 const C={
   bg:"#F6F3EE",card:"#FFFFFF",alt:"#FAF8F5",border:"#E8E2D8",
@@ -38,19 +38,35 @@ function getToday(){
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 }
 const TODAY=getToday();
-function getYesterday(){
-  const d=new Date();d.setDate(d.getDate()-1);
-  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
-}
-const YESTERDAY=getYesterday();
 
 function normalizeDate(raw){
   const s=String(raw||"");
-  // ISO timestamp이면 앞 10자만
   return s.length>10?s.slice(0,10):s;
 }
 
-// 00:00 ~ 23:30 전체 48개
+function formatDateKR(dateStr){
+  const [y,m,d]=dateStr.split("-");
+  return m+"월 "+d+"일";
+}
+
+function getDatesOfMonth(year,month){
+  // month: 1-12
+  const days=[];
+  const d=new Date(year,month-1,1);
+  while(d.getMonth()===month-1){
+    days.push(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"));
+    d.setDate(d.getDate()+1);
+  }
+  return days;
+}
+
+function getLast7Days(){
+  return Array.from({length:7},(_,i)=>{
+    const d=new Date();d.setDate(d.getDate()-(6-i));
+    return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+  });
+}
+
 const TIME_OPTS=Array.from({length:48},(_,i)=>
   String(Math.floor(i/2)).padStart(2,"0")+":"+(i%2===0?"00":"30")
 );
@@ -77,12 +93,14 @@ async function sheetGet(sheet){
     return d.data||[];
   }catch{return [];}
 }
+
 async function sheetWrite(sheet,row,values){
   try{
     await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify({action:"write",sheet,row,values})});
     return true;
   }catch{return false;}
 }
+
 async function apiLoadMembers(){
   const rows=await sheetGet("members");
   return rows.filter(r=>r[0]).map(r=>({
@@ -92,12 +110,15 @@ async function apiLoadMembers(){
     pin:String(r[7]),memo:String(r[8]||""),personalPrompt:String(r[9]||""),
   }));
 }
+
 async function apiSaveMembers(members){
   for(let i=0;i<members.length;i++){
     const m=members[i];
     await sheetWrite("members",i+1,[m.id,m.name,m.gender,m.age,m.goal,m.startWeight,m.targetWeight,m.pin,m.memo,m.personalPrompt||""]);
   }
 }
+
+// 특정 회원의 모든 기록 로드 - 중복 행은 마지막 것만 사용
 async function apiLoadRecords(memberId){
   const rows=await sheetGet("records");
   const result={};
@@ -109,6 +130,8 @@ async function apiLoadRecords(memberId){
   });
   return result;
 }
+
+// 전체 회원 기록 로드
 async function apiLoadAllRecords(memberIds){
   const rows=await sheetGet("records");
   const result={};
@@ -121,12 +144,32 @@ async function apiLoadAllRecords(memberIds){
   });
   return result;
 }
+
+// 저장: 중복 행 모두 삭제 후 새로 추가 방식
+// Apps Script 재배포 없이도 중복 문제 해결
 async function apiSaveRecord(memberId,date,record){
   const rows=await sheetGet("records");
-  const idx=rows.findIndex(r=>String(r[0])===memberId&&normalizeDate(r[1])===date);
-  const rowNum=idx>=0?idx+1:rows.length+1;
-  await sheetWrite("records",rowNum,[memberId,date,JSON.stringify(record)]);
+  // 같은 memberId + date인 행 모두 찾기
+  const matchRows=[];
+  rows.forEach((r,i)=>{
+    if(String(r[0])===memberId&&normalizeDate(r[1])===date){
+      matchRows.push(i+1);
+    }
+  });
+
+  if(matchRows.length===0){
+    // 새 행 추가
+    await sheetWrite("records",rows.length+1,[memberId,date,JSON.stringify(record)]);
+  } else {
+    // 첫 번째 매칭 행에 덮어쓰기
+    await sheetWrite("records",matchRows[0],[memberId,date,JSON.stringify(record)]);
+    // 나머지 중복 행은 빈 값으로 클리어 (역순으로)
+    for(let i=matchRows.length-1;i>=1;i--){
+      await sheetWrite("records",matchRows[i],["","",""]);
+    }
+  }
 }
+
 async function callGemini(apiKey,prompt){
   try{
     const res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key="+apiKey,{
@@ -146,31 +189,22 @@ const inputStyle={
   fontSize:13,color:"#2A2018",background:"#fff",outline:"none",width:"100%",display:"block"
 };
 
-// 한글 IME 안전 input
-// 핵심: compositionstart → compositionend → change 순서 보장
-// composing 중에는 onChange를 호출하지 않고, compositionend에서만 호출
 function KInput({value,onChange,placeholder,type="text",style={}}){
   const composing=useRef(false);
-  const innerRef=useRef(null);
-  // 외부 value 변화 시 DOM 동기화 (IME 중 아닐 때만)
+  const ref=useRef(null);
   useEffect(()=>{
-    if(innerRef.current&&!composing.current){
-      if(innerRef.current.value!==String(value??"")){
-        innerRef.current.value=String(value??"");
+    if(ref.current&&!composing.current){
+      if(ref.current.value!==String(value??"")){
+        ref.current.value=String(value??"");
       }
     }
   },[value]);
-  return (
-    <input
-      ref={innerRef}
-      type={type}
-      defaultValue={value??""}
-      placeholder={placeholder}
+  return(
+    <input ref={ref} type={type} defaultValue={value??""} placeholder={placeholder}
       onCompositionStart={()=>{composing.current=true;}}
       onCompositionEnd={e=>{composing.current=false;onChange(e.target.value);}}
       onChange={e=>{if(!composing.current)onChange(e.target.value);}}
-      style={{...inputStyle,...style}}
-    />
+      style={{...inputStyle,...style}}/>
   );
 }
 
@@ -319,9 +353,8 @@ function ExForm({initial,onSave,onCancel,label="추가"}){
   );
 }
 
-// ── 기록 폼 ───────────────────────────────────────────────────────────────────
-// recordKey: 날짜 문자열. 바뀌면 폼 전체가 리마운트됨 (key prop으로 제어)
-function RecordForm({member,record,onSave}){
+// ── 기록 폼 (날짜 선택 포함) ──────────────────────────────────────────────────
+function RecordForm({member,date,record,onSave,onDateChange}){
   const [weight,setWeight]=useState(String(record?.weight||""));
   const [waist,setWaist]=useState(String(record?.waist||""));
   const [sleepStart,setSleepStart]=useState(record?.sleep?.start||"");
@@ -330,7 +363,6 @@ function RecordForm({member,record,onSave}){
   const [period,setPeriod]=useState(record?.period||"");
   const [meals,setMeals]=useState(()=>record?.meals?JSON.parse(JSON.stringify(record.meals)):[]);
   const [exercise,setExercise]=useState(()=>record?.exercise?JSON.parse(JSON.stringify(record.exercise)):[]);
-
   const [addingMeal,setAddingMeal]=useState(false);
   const [editMealIdx,setEditMealIdx]=useState(null);
   const [delMealIdx,setDelMealIdx]=useState(null);
@@ -344,7 +376,7 @@ function RecordForm({member,record,onSave}){
 
   const handleSave=async()=>{
     setSaving(true);
-    await onSave({
+    await onSave(date,{
       weight:weight?parseFloat(weight):null,
       waist:waist?parseFloat(waist):null,
       sleep:{start:sleepStart,end:sleepEnd,total},
@@ -359,6 +391,15 @@ function RecordForm({member,record,onSave}){
 
   return(
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      {/* 날짜 선택 */}
+      <div style={{display:"flex",alignItems:"center",gap:12,background:C.accentL,borderRadius:10,padding:"10px 16px"}}>
+        <span style={{fontSize:13,fontWeight:700,color:C.accentD}}>📅 날짜</span>
+        <input type="date" value={date} onChange={e=>onDateChange(e.target.value)}
+          max={TODAY}
+          style={{...inputStyle,width:"auto",flex:1,maxWidth:180,background:"transparent",border:"1.5px solid "+C.accent}}/>
+        {date===TODAY&&<Tag>오늘</Tag>}
+      </div>
+
       {record?.coachComment&&(
         <div style={{background:C.accentL,borderRadius:12,padding:"12px 16px",border:"1.5px solid "+C.accent+"40"}}>
           <div style={{fontSize:11,fontWeight:700,color:C.accent,marginBottom:6}}>코치 코멘트</div>
@@ -368,8 +409,7 @@ function RecordForm({member,record,onSave}){
 
       {/* 신체 지표 */}
       <Card>
-        <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>🌙 수면 + 오늘 아침 측정</div>
-        <p style={{fontSize:11,color:C.light,marginBottom:12}}>어젯밤 수면과 오늘 아침 체중·허리를 입력해주세요.</p>
+        <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>신체 지표</div>
         <div className="form2col" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>체중 (kg)</div><KInput value={weight} onChange={setWeight} placeholder="예: 65.5" type="number"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>허리 둘레 (cm)</div><KInput value={waist} onChange={setWaist} placeholder="예: 80" type="number"/></div>
@@ -385,11 +425,10 @@ function RecordForm({member,record,onSave}){
 
       {/* 식사 기록 */}
       <Card>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-          <div style={{fontWeight:700,fontSize:14}}>🍽 어제 ({YESTERDAY}) 식사 기록</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:14}}>🍽 식사 기록</div>
           <Btn size="sm" onClick={()=>{setAddingMeal(true);setEditMealIdx(null);}}>+ 추가</Btn>
         </div>
-        <p style={{fontSize:11,color:C.light,marginBottom:12}}>어제 드신 식사와 포만감을 기록해주세요.</p>
         {addingMeal&&(
           <MealForm onSave={m=>{setMeals(p=>[...p,m]);setAddingMeal(false);}} onCancel={()=>setAddingMeal(false)}/>
         )}
@@ -430,7 +469,7 @@ function RecordForm({member,record,onSave}){
       {/* 운동 기록 */}
       <Card>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-          <div style={{fontWeight:700,fontSize:14}}>운동 기록</div>
+          <div style={{fontWeight:700,fontSize:14}}>🏃 운동 기록</div>
           <Btn size="sm" onClick={()=>{setAddingEx(true);setEditExIdx(null);}}>+ 추가</Btn>
         </div>
         {addingEx&&(
@@ -472,92 +511,34 @@ function RecordForm({member,record,onSave}){
 
 // ── 회원 홈 ───────────────────────────────────────────────────────────────────
 function MemberHome({member,records,onSave}){
-  const [tab,setTab]=useState("today");
-  const [histDate,setHistDate]=useState(null);
-  const pastDates=Object.keys(records).sort().reverse().filter(d=>d!==TODAY);
+  const [selectedDate,setSelectedDate]=useState(TODAY);
+
+  const handleDateChange=d=>{
+    setSelectedDate(d);
+  };
+
+  const handleSave=async(date,rec)=>{
+    await onSave(date,rec);
+  };
 
   return(
-    <div>
-      <div style={{display:"flex",borderBottom:"2px solid "+C.border,marginBottom:20}}>
-        {[["today","오늘 기록"],["history","지난 기록"]].map(([k,l])=>(
-          <button key={k} onClick={()=>{setTab(k);setHistDate(null);}}
-            style={{padding:"10px 20px",border:"none",background:"none",cursor:"pointer",fontSize:14,
-              fontWeight:tab===k?700:400,color:tab===k?C.accent:C.mid,
-              borderBottom:"2px solid "+(tab===k?C.accent:"transparent"),marginBottom:-2}}>
-            {l}
-          </button>
-        ))}
-      </div>
-
-      {tab==="today"&&(
-        <div>
-          <div style={{background:C.accentL,borderRadius:10,padding:"10px 16px",marginBottom:16,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-            <span style={{fontSize:13,color:C.accentD}}>📅 <b>{TODAY}</b> 아침 기록</span>
-            <span style={{fontSize:11,color:C.mid}}>· 수면/체중은 오늘 아침, 식사는 어제({YESTERDAY}) 기준이에요</span>
-          </div>
-          <RecordForm key={"today-"+JSON.stringify(Object.keys(records[TODAY]||{}).length)}
-            member={member} record={records[TODAY]}
-            onSave={async rec=>{await onSave(TODAY,rec);}}/>
-        </div>
-      )}
-
-      {tab==="history"&&!histDate&&(
-        <div>
-          {pastDates.length===0&&<div style={{textAlign:"center",padding:40,color:C.light}}>지난 기록이 없어요</div>}
-          {pastDates.map(d=>{
-            const r=records[d];
-            return(
-              <div key={d} onClick={()=>setHistDate(d)}
-                style={{background:C.card,borderRadius:14,border:"1px solid "+C.border,padding:16,
-                  marginBottom:10,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div>
-                  <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>{d}</div>
-                  <div style={{fontSize:12,color:C.mid,display:"flex",gap:12,flexWrap:"wrap"}}>
-                    {r?.weight&&<span>체중 <b style={{color:C.accent}}>{r.weight}kg</b></span>}
-                    {r?.sleep?.total&&<span>수면 <b>{r.sleep.total}</b></span>}
-                    {r?.meals?.length>0&&<span>전날 식사 <b>{r.meals.length}끼</b></span>}
-                    {r?.exercise?.length>0&&<span>운동 <b>{r.exercise.length}회</b></span>}
-                  </div>
-                </div>
-                <span style={{color:C.light,fontSize:24}}>›</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {tab==="history"&&histDate&&(
-        <div>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
-            <button onClick={()=>setHistDate(null)}
-              style={{background:"none",border:"none",cursor:"pointer",fontSize:22,color:C.mid}}>←</button>
-            <span style={{fontWeight:700,fontSize:16}}>{histDate} 기록 수정</span>
-          </div>
-          {/* key=histDate: 날짜 바뀌면 리마운트 */}
-          <RecordForm key={"hist-"+histDate}
-            member={member} record={records[histDate]}
-            onSave={async rec=>{await onSave(histDate,rec);setHistDate(null);}}/>
-        </div>
-      )}
-    </div>
+    <RecordForm
+      key={selectedDate}
+      member={member}
+      date={selectedDate}
+      record={records[selectedDate]}
+      onSave={handleSave}
+      onDateChange={handleDateChange}
+    />
   );
 }
 
-// ── 주간 뷰 (코치) ────────────────────────────────────────────────────────────
-function WeeklyView({member,records,onUpdate,apiKey,coachPrompt}){
-  const days=Array.from({length:7},(_,i)=>{
-    const d=new Date();d.setDate(d.getDate()-(6-i));
-    return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
-  });
-  const DAY_KR=["월","화","수","목","금","토","일"];
-  const todayDow=new Date().getDay();
-  const baseIdx=todayDow===0?6:todayDow-1;
-
+// ── 주간/월간 테이블 (코치) ───────────────────────────────────────────────────
+function RecordTable({member,records,dates,onUpdate,showPhotoModal}){
+  const DAY_KR=["일","월","화","수","목","금","토"];
   const [editComment,setEditComment]=useState(null);
   const [commentDraft,setCommentDraft]=useState("");
   const [savingC,setSavingC]=useState(false);
-  const [report,setReport]=useState(null);
-  const [genning,setGenning]=useState(false);
 
   const saveComment=async date=>{
     setSavingC(true);
@@ -566,10 +547,183 @@ function WeeklyView({member,records,onUpdate,apiKey,coachPrompt}){
     setEditComment(null);setSavingC(false);
   };
 
+  const rows=[
+    {label:"수면",render:r=>r?.sleep?.total?<span style={{fontSize:11,fontWeight:700}}>{r.sleep.total}</span>:null},
+    {label:"체중",render:(r,i,allDates)=>{
+      if(!r?.weight)return null;
+      const prevDate=allDates[i-1];
+      const prev=prevDate&&records[prevDate]?.weight;
+      const diff=prev?(r.weight-prev).toFixed(1):null;
+      return<div style={{textAlign:"center"}}>
+        <div style={{fontSize:13,fontWeight:800,color:C.accent}}>{r.weight}</div>
+        {diff&&<div style={{fontSize:9,color:parseFloat(diff)>0?C.danger:C.ok}}>{parseFloat(diff)>0?"+":""}{diff}</div>}
+      </div>;
+    }},
+    {label:"허리",render:r=>r?.waist?<span style={{fontSize:11}}>{r.waist}</span>:null},
+    {label:"화장실",render:r=>r?.toilet!=null?<span style={{fontSize:11}}>{r.toilet}</span>:null},
+    ...(member.gender==="female"?[{label:"생리",render:r=>r?.period?<span style={{fontSize:10,color:C.female}}>{r.period}</span>:null}]:[]),
+    {label:"포만감",render:r=>{
+      const vals=r?.meals?.map(m=>m.satietyAfter).filter(Boolean)||[];
+      if(!vals.length)return null;
+      const avg=(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1);
+      return<span style={{fontSize:13,fontWeight:800,color:parseFloat(avg)>=7?C.ok:parseFloat(avg)>=4?C.warn:C.danger}}>{avg}</span>;
+    }},
+    {label:"운동",render:r=>r?.exercise?.length?r.exercise.map((ex,i)=><div key={i} style={{fontSize:9,color:C.ok,lineHeight:1.5}}>{ex.note}</div>):null},
+    {label:"식사",render:r=>r?.meals?.length?r.meals.map((m,i)=>(
+      <div key={i} style={{marginBottom:4,textAlign:"left"}}>
+        <div style={{fontSize:9,color:C.light}}>{m.time}</div>
+        <div style={{fontSize:9,color:C.text,wordBreak:"break-all"}}>{m.food}</div>
+        <div style={{display:"flex",gap:4}}>
+          <span style={{fontSize:9,color:C.warn}}>공{m.hungerBefore}</span>
+          <span style={{fontSize:9,color:C.ok}}>포{m.satietyAfter}</span>
+          {m.photo&&<span style={{fontSize:9,cursor:"pointer",color:C.accent}} onClick={()=>showPhotoModal(m.photo)}>📷</span>}
+        </div>
+      </div>
+    )):null},
+  ];
+
+  return(
+    <Card style={{padding:0,overflow:"hidden"}}>
+      <div className="scrollx">
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:Math.max(500,dates.length*90)}}>
+          <thead>
+            <tr style={{background:C.alt}}>
+              <th style={{padding:"10px 14px",fontSize:11,color:C.mid,fontWeight:700,textAlign:"left",borderBottom:"1px solid "+C.border,minWidth:60,position:"sticky",left:0,background:C.alt,zIndex:2}}>항목</th>
+              {dates.map(d=>{
+                const isToday=d===TODAY;
+                const dow=new Date(d).getDay();
+                const hasRecord=!!records[d];
+                return(
+                  <th key={d} style={{padding:"8px 4px",textAlign:"center",borderBottom:"1px solid "+C.border,
+                    background:isToday?C.accentL:C.alt,minWidth:80,
+                    borderLeft:"1px solid "+C.border}}>
+                    <div style={{fontSize:11,fontWeight:700,color:dow===0?C.danger:dow===6?C.male:isToday?C.accent:C.mid}}>
+                      {DAY_KR[dow]}
+                    </div>
+                    <div style={{fontSize:10,color:C.mid,fontWeight:isToday?700:400}}>{d.slice(5)}</div>
+                    <div style={{width:5,height:5,borderRadius:"50%",background:hasRecord?C.ok:C.border,margin:"3px auto 0"}}/>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({label,render})=>(
+              <tr key={label}>
+                <td style={{padding:"8px 14px",fontSize:11,color:label==="생리"?C.female:C.mid,fontWeight:600,
+                  borderBottom:"1px solid "+C.border,background:C.alt,
+                  position:"sticky",left:0,zIndex:1}}>{label}</td>
+                {dates.map((d,i)=>(
+                  <td key={d} style={{padding:"6px 4px",textAlign:"center",
+                    borderBottom:"1px solid "+C.border,borderLeft:"1px solid "+C.border,
+                    background:d===TODAY?"#FFFDF9":"transparent",verticalAlign:"top"}}>
+                    {render(records[d],i,dates)||<span style={{fontSize:10,color:C.border}}>-</span>}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {/* 코멘트 행 */}
+            <tr>
+              <td style={{padding:"8px 14px",fontSize:11,color:C.accent,fontWeight:600,
+                background:C.alt,verticalAlign:"top",position:"sticky",left:0,zIndex:1}}>코멘트</td>
+              {dates.map(d=>(
+                <td key={d} style={{padding:"5px 4px",verticalAlign:"top",
+                  borderLeft:"1px solid "+C.border,
+                  background:d===TODAY?"#FFFDF9":"transparent"}}>
+                  {editComment===d?(
+                    <div>
+                      <textarea value={commentDraft} onChange={e=>setCommentDraft(e.target.value)}
+                        style={{width:"100%",minHeight:56,fontSize:10,border:"1px solid "+C.border,
+                          borderRadius:6,padding:4,fontFamily:"inherit",resize:"none"}} autoFocus/>
+                      <div style={{display:"flex",gap:3,marginTop:3}}>
+                        <Btn size="sm" onClick={()=>saveComment(d)} disabled={savingC} style={{fontSize:10,padding:"3px 7px"}}>{savingC?"저장중":"저장"}</Btn>
+                        <Btn size="sm" variant="ghost" onClick={()=>setEditComment(null)} style={{fontSize:10,padding:"3px 7px"}}>취소</Btn>
+                      </div>
+                    </div>
+                  ):(
+                    <div onClick={()=>records[d]&&(setEditComment(d),setCommentDraft(records[d]?.coachComment||""))}
+                      style={{cursor:records[d]?"pointer":"default",minHeight:20}}>
+                      {records[d]?.coachComment
+                        ?<div style={{fontSize:9,color:C.accentD,lineHeight:1.5}}>{records[d].coachComment}</div>
+                        :records[d]?<div style={{fontSize:9,color:C.border}}>+ 추가</div>:null}
+                    </div>
+                  )}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+// ── 체중 그래프 ───────────────────────────────────────────────────────────────
+function WeightChart({member,records,dates}){
+  const weightDates=dates.filter(d=>records[d]?.weight);
+  if(weightDates.length<2)return null;
+  const wts=weightDates.map(d=>records[d].weight);
+  const minW=Math.min(...wts)-1,maxW=Math.max(...wts)+1;
+  const W=560,H=120,pL=36,pR=10,pT=10,pB=22;
+  const xp=i=>pL+i*(W-pL-pR)/(weightDates.length-1);
+  const yp=v=>pT+(H-pT-pB)*(1-(v-minW)/(maxW-minW));
+  const path=wts.map((w,i)=>(i===0?"M":"L")+xp(i)+","+yp(w)).join(" ");
+  return(
+    <Card>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>체중 추이</div>
+      <div className="scrollx">
+        <svg width={W} height={H} style={{display:"block"}}>
+          {[0,.25,.5,.75,1].map((t,i)=>{
+            const y=pT+(H-pT-pB)*t,v=(maxW-(maxW-minW)*t).toFixed(1);
+            return<g key={i}><line x1={pL} x2={W-pR} y1={y} y2={y} stroke={C.border} strokeDasharray="3 3"/>
+              <text x={pL-4} y={y+4} fontSize={9} fill={C.light} textAnchor="end">{v}</text></g>;
+          })}
+          {member.targetWeight&&<line x1={pL} x2={W-pR} y1={yp(member.targetWeight)} y2={yp(member.targetWeight)} stroke={C.ok} strokeDasharray="4 4" strokeWidth={1.5}/>}
+          <path d={path} fill="none" stroke={C.accent} strokeWidth={2.5} strokeLinejoin="round"/>
+          {wts.map((w,i)=>(
+            <g key={i}>
+              <circle cx={xp(i)} cy={yp(w)} r={4} fill={C.accent}/>
+              <text x={xp(i)} y={H-5} fontSize={9} fill={C.light} textAnchor="middle">{weightDates[i].slice(5)}</text>
+              <text x={xp(i)} y={yp(w)-7} fontSize={9} fill={C.accent} textAnchor="middle">{w}</text>
+            </g>
+          ))}
+        </svg>
+      </div>
+    </Card>
+  );
+}
+
+// ── 코치 회원 상세 뷰 ────────────────────────────────────────────────────────
+function MemberDetailView({member,records,onUpdate,apiKey,coachPrompt}){
+  const [viewMode,setViewMode]=useState("weekly"); // weekly | monthly
+  const now=new Date();
+  const [monthYear,setMonthYear]=useState({year:now.getFullYear(),month:now.getMonth()+1});
+  const [report,setReport]=useState(null);
+  const [genning,setGenning]=useState(false);
+  const [photoModal,setPhotoModal]=useState(null);
+
+  const weekDates=getLast7Days();
+  const monthDates=getDatesOfMonth(monthYear.year,monthYear.month);
+
+  const displayDates=viewMode==="weekly"?weekDates:monthDates;
+
+  const prevMonth=()=>{
+    setMonthYear(p=>{
+      const m=p.month-1;
+      return m<1?{year:p.year-1,month:12}:{year:p.year,month:m};
+    });
+  };
+  const nextMonth=()=>{
+    setMonthYear(p=>{
+      const m=p.month+1;
+      return m>12?{year:p.year+1,month:1}:{year:p.year,month:m};
+    });
+  };
+
   const genReport=async()=>{
     if(!apiKey)return alert("API 키를 먼저 입력해주세요.");
     setGenning(true);
-    const weekData=days.map(d=>{
+    const weekData=weekDates.map(d=>{
       const r=records[d];if(!r)return null;
       return{date:d,weight:r.weight,sleep:r.sleep?.total,period:r.period,
         meals:r.meals?.map(m=>({food:m.food,hunger:m.hungerBefore,satiety:m.satietyAfter})),
@@ -580,165 +734,86 @@ function WeeklyView({member,records,onUpdate,apiKey,coachPrompt}){
     setReport(r);setGenning(false);
   };
 
-  const weights=days.filter(d=>records[d]?.weight).map(d=>({date:d,w:records[d].weight}));
-
   return(
     <div style={{display:"flex",flexDirection:"column",gap:16}}>
-      <Card style={{padding:0,overflow:"hidden"}}>
-        <div className="scrollx">
-          <table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}>
-            <thead>
-              <tr style={{background:C.alt}}>
-                <th style={{padding:"10px 14px",fontSize:11,color:C.mid,fontWeight:700,textAlign:"left",borderBottom:"1px solid "+C.border,minWidth:60}}>항목</th>
-                {days.map((d,i)=>{
-                  const isToday=d===TODAY;
-                  const dayIdx=(baseIdx-(6-i)+7)%7;
-                  return(
-                    <th key={d} style={{padding:"8px 4px",textAlign:"center",borderBottom:"1px solid "+C.border,background:isToday?C.accentL:C.alt,minWidth:90}}>
-                      <div style={{fontSize:12,fontWeight:700,color:isToday?C.accent:C.mid}}>{DAY_KR[dayIdx]}</div>
-                      <div style={{fontSize:9,color:C.light}}>{d.slice(5)}</div>
-                      <div style={{width:5,height:5,borderRadius:"50%",background:records[d]?C.ok:C.border,margin:"3px auto 0"}}/>
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                {label:"수면",render:r=>r?.sleep?.total?<span style={{fontSize:11,fontWeight:700}}>{r.sleep.total}</span>:null},
-                {label:"체중",render:(r,i)=>{
-                  if(!r?.weight)return null;
-                  const prev=i>0?records[days[i-1]]?.weight:null;
-                  const diff=prev?(r.weight-prev).toFixed(1):null;
-                  return<div><div style={{fontSize:13,fontWeight:800,color:C.accent}}>{r.weight}</div>
-                    {diff&&<div style={{fontSize:9,color:parseFloat(diff)>0?C.danger:C.ok}}>{parseFloat(diff)>0?"+":""}{diff}</div>}</div>;
-                }},
-                {label:"허리",render:r=>r?.waist?<span style={{fontSize:11}}>{r.waist}</span>:null},
-                {label:"화장실",render:r=>r?.toilet!=null?<span style={{fontSize:11}}>{r.toilet}</span>:null},
-                ...(member.gender==="female"?[{label:"생리",render:r=>r?.period?<span style={{fontSize:10,color:C.female}}>{r.period}</span>:null}]:[]),
-                {label:"포만감",render:r=>{
-                  const vals=r?.meals?.map(m=>m.satietyAfter).filter(Boolean)||[];
-                  if(!vals.length)return null;
-                  const avg=(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1);
-                  return<span style={{fontSize:13,fontWeight:800,color:parseFloat(avg)>=7?C.ok:parseFloat(avg)>=4?C.warn:C.danger}}>{avg}</span>;
-                }},
-                {label:"운동",render:r=>r?.exercise?.length?r.exercise.map((ex,i)=><div key={i} style={{fontSize:9,color:C.ok,lineHeight:1.4}}>{ex.note}</div>):null},
-                {label:"식사(전날)",render:r=>r?.meals?.length?r.meals.map((m,i)=>(
-                  <div key={i} style={{marginBottom:3}}>
-                    <div style={{fontSize:9,color:C.light}}>{m.time}</div>
-                    <div style={{fontSize:9,color:C.text}}>{m.food}</div>
-                    <span style={{fontSize:9,color:C.warn}}>공{m.hungerBefore}</span>
-                    <span style={{fontSize:9,color:C.light}}>/</span>
-                    <span style={{fontSize:9,color:C.ok}}>포{m.satietyAfter}</span>
-                    {m.photo&&<span style={{fontSize:9}}> 📷</span>}
-                  </div>
-                )):null},
-              ].map(({label,render})=>(
-                <tr key={label}>
-                  <td style={{padding:"8px 14px",fontSize:11,color:label==="생리"?C.female:C.mid,fontWeight:600,borderBottom:"1px solid "+C.border,background:C.alt}}>{label}</td>
-                  {days.map((d,i)=>(
-                    <td key={d} style={{padding:"6px 4px",textAlign:"center",borderBottom:"1px solid "+C.border,background:d===TODAY?"#FFFDF9":"transparent",verticalAlign:"top"}}>
-                      {render(records[d],i)||<span style={{fontSize:10,color:C.border}}>-</span>}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-              <tr>
-                <td style={{padding:"8px 14px",fontSize:11,color:C.accent,fontWeight:600,background:C.alt,verticalAlign:"top"}}>코멘트</td>
-                {days.map(d=>(
-                  <td key={d} style={{padding:"5px 4px",verticalAlign:"top",background:d===TODAY?"#FFFDF9":"transparent"}}>
-                    {editComment===d?(
-                      <div>
-                        <textarea value={commentDraft} onChange={e=>setCommentDraft(e.target.value)}
-                          style={{width:"100%",minHeight:56,fontSize:10,border:"1px solid "+C.border,borderRadius:6,padding:4,fontFamily:"inherit",resize:"none"}} autoFocus/>
-                        <div style={{display:"flex",gap:3,marginTop:3}}>
-                          <Btn size="sm" onClick={()=>saveComment(d)} disabled={savingC} style={{fontSize:10,padding:"3px 7px"}}>{savingC?"저장중":"저장"}</Btn>
-                          <Btn size="sm" variant="ghost" onClick={()=>setEditComment(null)} style={{fontSize:10,padding:"3px 7px"}}>취소</Btn>
-                        </div>
-                      </div>
-                    ):(
-                      <div onClick={()=>records[d]&&(setEditComment(d),setCommentDraft(records[d]?.coachComment||""))}
-                        style={{cursor:records[d]?"pointer":"default",minHeight:20}}>
-                        {records[d]?.coachComment
-                          ?<div style={{fontSize:9,color:C.accentD,lineHeight:1.5}}>{records[d].coachComment}</div>
-                          :records[d]?<div style={{fontSize:9,color:C.border}}>+ 추가</div>:null}
-                      </div>
-                    )}
-                  </td>
-                ))}
-              </tr>
-            </tbody>
-          </table>
+      {/* 뷰 전환 탭 */}
+      <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+        <div style={{display:"flex",border:"1.5px solid "+C.border,borderRadius:8,overflow:"hidden"}}>
+          {[["weekly","주간"],["monthly","월간"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setViewMode(k)}
+              style={{padding:"7px 18px",border:"none",cursor:"pointer",fontSize:13,fontWeight:viewMode===k?700:400,
+                background:viewMode===k?C.accent:"transparent",color:viewMode===k?"#fff":C.mid}}>
+              {l}
+            </button>
+          ))}
         </div>
-      <div style={{fontSize:11,color:C.light,padding:"4px 14px 8px",textAlign:"right"}}>
-        * 식사 행은 해당 날짜의 전날 식사 기록입니다
-      </div>
-      </Card>
-
-      {weights.length>=2&&(()=>{
-        const wts=weights.map(x=>x.w);
-        const minW=Math.min(...wts)-1,maxW=Math.max(...wts)+1;
-        const W=560,H=120,pL=36,pR=10,pT=10,pB=22;
-        const xp=i=>pL+i*(W-pL-pR)/(weights.length-1);
-        const yp=v=>pT+(H-pT-pB)*(1-(v-minW)/(maxW-minW));
-        const path=wts.map((w,i)=>(i===0?"M":"L")+xp(i)+","+yp(w)).join(" ");
-        return(
-          <Card>
-            <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>체중 추이</div>
-            <div className="scrollx">
-              <svg width={W} height={H} style={{display:"block"}}>
-                {[0,.25,.5,.75,1].map((t,i)=>{
-                  const y=pT+(H-pT-pB)*t,v=(maxW-(maxW-minW)*t).toFixed(1);
-                  return<g key={i}><line x1={pL} x2={W-pR} y1={y} y2={y} stroke={C.border} strokeDasharray="3 3"/>
-                    <text x={pL-4} y={y+4} fontSize={9} fill={C.light} textAnchor="end">{v}</text></g>;
-                })}
-                {member.targetWeight&&<line x1={pL} x2={W-pR} y1={yp(member.targetWeight)} y2={yp(member.targetWeight)} stroke={C.ok} strokeDasharray="4 4" strokeWidth={1.5}/>}
-                <path d={path} fill="none" stroke={C.accent} strokeWidth={2.5} strokeLinejoin="round"/>
-                {wts.map((w,i)=>(
-                  <g key={i}>
-                    <circle cx={xp(i)} cy={yp(w)} r={4} fill={C.accent}/>
-                    <text x={xp(i)} y={H-5} fontSize={9} fill={C.light} textAnchor="middle">{weights[i].date.slice(5)}</text>
-                    <text x={xp(i)} y={yp(w)-7} fontSize={9} fill={C.accent} textAnchor="middle">{w}</text>
-                  </g>
-                ))}
-              </svg>
-            </div>
-          </Card>
-        );
-      })()}
-
-      <Card style={{border:"1.5px solid #C0DAC8"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-          <div style={{fontWeight:700,fontSize:13,color:C.ok}}>✦ 주간 AI 리포트 (코치 전용)</div>
-          <Btn size="sm" variant="outline" onClick={genReport} disabled={genning||!apiKey} style={{borderColor:C.ok,color:C.ok}}>
-            {genning?"생성 중...":"리포트 생성"}
-          </Btn>
-        </div>
-        {!apiKey&&<p style={{fontSize:12,color:C.light}}>설정에서 API 키를 먼저 입력해주세요.</p>}
-        {report&&(
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {report.highlight&&<div style={{background:"#EFF7F1",borderRadius:8,padding:"10px 14px"}}>
-              <div style={{fontSize:11,fontWeight:700,color:C.ok,marginBottom:4}}>✨ 이번 주 잘한 점</div>
-              <p style={{fontSize:13,color:C.text}}>{report.highlight}</p>
-            </div>}
-            {[["식욕 안정 패턴","appetite_pattern"],["포만감 추이","satiety_trend"],
-              ...(member.gender==="female"?[["생리 주기 연관성","period_relation"]]:[]),
-              ["수면 연관성","sleep_relation"],["운동 일관성","exercise_consistency"],["다음 주 코칭 참고","coach_suggestion"]
-            ].map(([l,k])=>report[k]?<div key={k}><div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:3}}>{l}</div>
-              <p style={{fontSize:13,color:C.text,lineHeight:1.6}}>{report[k]}</p></div>:null)}
+        {viewMode==="monthly"&&(
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <Btn size="sm" variant="ghost" onClick={prevMonth}>◀</Btn>
+            <span style={{fontWeight:700,fontSize:14}}>{monthYear.year}년 {monthYear.month}월</span>
+            <Btn size="sm" variant="ghost" onClick={nextMonth}>▶</Btn>
           </div>
         )}
-      </Card>
+        {viewMode==="weekly"&&(
+          <span style={{fontSize:12,color:C.light}}>최근 7일</span>
+        )}
+      </div>
+
+      {/* 테이블 */}
+      <RecordTable
+        member={member}
+        records={records}
+        dates={displayDates}
+        onUpdate={onUpdate}
+        showPhotoModal={setPhotoModal}
+      />
+
+      {/* 체중 그래프 */}
+      <WeightChart member={member} records={records} dates={displayDates}/>
+
+      {/* AI 리포트 (주간만) */}
+      {viewMode==="weekly"&&(
+        <Card style={{border:"1.5px solid #C0DAC8"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontWeight:700,fontSize:13,color:C.ok}}>✦ 주간 AI 리포트 (코치 전용)</div>
+            <Btn size="sm" variant="outline" onClick={genReport} disabled={genning||!apiKey} style={{borderColor:C.ok,color:C.ok}}>
+              {genning?"생성 중...":"리포트 생성"}
+            </Btn>
+          </div>
+          {!apiKey&&<p style={{fontSize:12,color:C.light}}>설정에서 API 키를 먼저 입력해주세요.</p>}
+          {report&&(
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {report.highlight&&<div style={{background:"#EFF7F1",borderRadius:8,padding:"10px 14px"}}>
+                <div style={{fontSize:11,fontWeight:700,color:C.ok,marginBottom:4}}>✨ 이번 주 잘한 점</div>
+                <p style={{fontSize:13,color:C.text}}>{report.highlight}</p>
+              </div>}
+              {[["식욕 안정 패턴","appetite_pattern"],["포만감 추이","satiety_trend"],
+                ...(member.gender==="female"?[["생리 주기 연관성","period_relation"]]:[]),
+                ["수면 연관성","sleep_relation"],["운동 일관성","exercise_consistency"],["다음 주 코칭 참고","coach_suggestion"]
+              ].map(([l,k])=>report[k]?<div key={k}>
+                <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:3}}>{l}</div>
+                <p style={{fontSize:13,color:C.text,lineHeight:1.6}}>{report[k]}</p>
+              </div>:null)}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* 사진 모달 */}
+      {photoModal&&(
+        <div onClick={()=>setPhotoModal(null)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:1000,
+            display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
+          <img src={photoModal} alt="" style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:12}}/>
+        </div>
+      )}
     </div>
   );
 }
 
-// ── 회원 카드 ─────────────────────────────────────────────────────────────────
+// ── 회원 카드 (코치 대시보드) ─────────────────────────────────────────────────
 function MemberCard({member,records,onSelect,onEdit,onDelete,delId,setDelId}){
-  const days7=Array.from({length:7},(_,i)=>{
-    const d=new Date();d.setDate(d.getDate()-(6-i));
-    return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
-  });
+  const days7=getLast7Days();
   const todayRec=records[TODAY];
   const latestDate=Object.keys(records).sort().reverse()[0];
   const latestRec=latestDate?records[latestDate]:null;
@@ -746,22 +821,20 @@ function MemberCard({member,records,onSelect,onEdit,onDelete,delId,setDelId}){
   const wDiff=weights.length>=2?(weights[weights.length-1]-weights[0]).toFixed(1):null;
   const satVals=days7.slice(-3).flatMap(d=>records[d]?.meals?.map(m=>m.satietyAfter).filter(Boolean)||[]);
   const avgSat=satVals.length?(satVals.reduce((a,b)=>a+b,0)/satVals.length).toFixed(1):null;
-  const sleepH=days7.map(d=>{
-    const t=records[d]?.sleep?.total;if(!t)return null;
-    const m=t.match(/(\d+)시간(?:\s*(\d+)분)?/);
-    return m?parseInt(m[1])+(parseInt(m[2]||0)/60):null;
-  }).filter(Boolean);
-  const avgSleep=sleepH.length?(sleepH.reduce((a,b)=>a+b,0)/sleepH.length).toFixed(1):null;
-  const recentPeriod=Object.keys(records).sort().reverse().slice(0,5).map(d=>records[d]?.period).find(Boolean);
   const dots=days7.map(d=>!!records[d]);
+
   return(
     <div style={{background:C.card,borderRadius:16,border:"1px solid "+C.border,overflow:"hidden"}}>
       <div style={{padding:"14px 16px 10px",borderBottom:"1px solid "+C.border,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div style={{flex:1,cursor:"pointer"}} onClick={()=>onSelect(member.id)}>
           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
             <span style={{fontWeight:700,fontSize:16}}>{member.name}</span>
-            <Tag bg={member.gender==="female"?"#F9E8ED":"#E8EDF5"} color={member.gender==="female"?C.female:C.male}>{member.gender==="female"?"여":"남"} {member.age}세</Tag>
-            <Tag bg={todayRec?"#EFF7F1":"#FDF0EE"} color={todayRec?C.ok:C.danger}>{todayRec?"오늘 ✓":"오늘 미기록"}</Tag>
+            <Tag bg={member.gender==="female"?"#F9E8ED":"#E8EDF5"} color={member.gender==="female"?C.female:C.male}>
+              {member.gender==="female"?"여":"남"} {member.age}세
+            </Tag>
+            <Tag bg={todayRec?"#EFF7F1":"#FDF0EE"} color={todayRec?C.ok:C.danger}>
+              {todayRec?"오늘 ✓":"오늘 미기록"}
+            </Tag>
           </div>
           <div style={{fontSize:12,color:C.mid}}>{member.goal}</div>
           {member.memo&&<div style={{fontSize:11,color:C.light,marginTop:2}}>{member.memo}</div>}
@@ -781,7 +854,7 @@ function MemberCard({member,records,onSelect,onEdit,onDelete,delId,setDelId}){
           {dots.map((h,i)=><div key={i} style={{width:8,height:8,borderRadius:"50%",background:h?C.ok:C.border}}/>)}
           <span style={{fontSize:10,color:C.light,marginLeft:4}}>({dots.filter(Boolean).length}/7)</span>
         </div>
-        <div style={{display:"flex",gap:0,flexWrap:"wrap"}}>
+        <div style={{display:"flex",flexWrap:"wrap",gap:0}}>
           {latestRec?.weight&&<div style={{padding:"4px 12px 4px 0",borderRight:"1px solid "+C.border,marginRight:12,marginBottom:6}}>
             <div style={{fontSize:10,color:C.light}}>최근 체중</div>
             <div style={{fontSize:16,fontWeight:800,color:C.accent}}>{latestRec.weight}<span style={{fontSize:10,fontWeight:400}}>kg</span></div>
@@ -791,14 +864,6 @@ function MemberCard({member,records,onSelect,onEdit,onDelete,delId,setDelId}){
             <div style={{fontSize:10,color:C.light}}>포만감 평균</div>
             <div style={{fontSize:16,fontWeight:800,color:parseFloat(avgSat)>=7?C.ok:parseFloat(avgSat)>=4?C.warn:C.danger}}>{avgSat}</div>
             <div style={{fontSize:10,color:C.light}}>최근 3일</div>
-          </div>}
-          {avgSleep&&<div style={{padding:"4px 12px 4px 0",borderRight:"1px solid "+C.border,marginRight:12,marginBottom:6}}>
-            <div style={{fontSize:10,color:C.light}}>평균 수면</div>
-            <div style={{fontSize:16,fontWeight:800}}>{avgSleep}<span style={{fontSize:10,fontWeight:400}}>h</span></div>
-          </div>}
-          {member.gender==="female"&&recentPeriod&&<div style={{padding:"4px 0",marginBottom:6}}>
-            <div style={{fontSize:10,color:C.female}}>생리</div>
-            <div style={{fontSize:14,fontWeight:700,color:C.female}}>{recentPeriod}</div>
           </div>}
         </div>
         {weights.length>=3&&(()=>{
@@ -814,7 +879,7 @@ function MemberCard({member,records,onSelect,onEdit,onDelete,delId,setDelId}){
           <span style={{fontSize:10,color:C.accent,fontWeight:700}}>내 코멘트 </span>
           <span style={{fontSize:11,color:C.accentD}}>{latestRec.coachComment}</span>
         </div>}
-        <div style={{marginTop:8,fontSize:11,color:C.light,textAlign:"right"}}>주간 상세 보기 →</div>
+        <div style={{marginTop:8,fontSize:11,color:C.light,textAlign:"right"}}>상세 보기 →</div>
       </div>
     </div>
   );
@@ -843,7 +908,7 @@ function MemberForm({initial,onSave,onCancel,saving}){
       <div style={{marginBottom:10}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>목표</div><KInput value={d.goal} onChange={f("goal")} placeholder="식욕 안정 & 체지방 감량"/></div>
       <div style={{marginBottom:10}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>특이사항</div><KInput value={d.memo} onChange={f("memo")} placeholder="무릎 주의, 갑상선약 복용"/></div>
       <div style={{marginBottom:14}}>
-        <div style={{fontSize:12,color:C.mid,marginBottom:4}}>개별 AI 참고사항 <span style={{color:C.light,fontWeight:400}}>(공통 프롬프트에 추가됩니다)</span></div>
+        <div style={{fontSize:12,color:C.mid,marginBottom:4}}>개별 AI 참고사항</div>
         <textarea value={d.personalPrompt} onChange={e=>setD(p=>({...p,personalPrompt:e.target.value}))}
           placeholder="예: 폭식 이력 있음. 격려 위주 피드백 필요."
           style={{...inputStyle,minHeight:72,resize:"vertical"}}/>
@@ -859,7 +924,7 @@ function MemberForm({initial,onSave,onCancel,saving}){
 // ── 코치 대시보드 ─────────────────────────────────────────────────────────────
 function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setApiKey,coachPrompt,setCoachPrompt}){
   const [selected,setSelected]=useState(null);
-  const [loadingDetail,setLoadingDetail]=useState(false);
+  const [loading,setLoading]=useState(false);
   const [showSettings,setShowSettings]=useState(false);
   const [showMemberForm,setShowMemberForm]=useState(false);
   const [editingMember,setEditingMember]=useState(null);
@@ -871,14 +936,13 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
   const member=members.find(m=>m.id===selected);
   const memberRecords=selected?(allRecords[selected]||{}):{};
 
+  // 회원 클릭 시 항상 최신 데이터 로드
   const selectMember=async id=>{
     setSelected(id);
-    if(!allRecords[id]||Object.keys(allRecords[id]).length===0){
-      setLoadingDetail(true);
-      const recs=await apiLoadRecords(id);
-      setAllRecords(p=>({...p,[id]:recs}));
-      setLoadingDetail(false);
-    }
+    setLoading(true);
+    const recs=await apiLoadRecords(id);
+    setAllRecords(p=>({...p,[id]:recs}));
+    setLoading(false);
   };
 
   const updateRecord=async(date,rec)=>{
@@ -911,13 +975,17 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
         <div style={{fontWeight:700,fontSize:18,display:"flex",alignItems:"center",gap:10}}>
           {selected&&member
-            ?<><button onClick={()=>setSelected(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:22,color:C.mid,padding:0}}>←</button>
+            ?<><button onClick={()=>setSelected(null)}
+                style={{background:"none",border:"none",cursor:"pointer",fontSize:22,color:C.mid,padding:0}}>←</button>
               <span>{member.name}</span>
-              <Tag bg={member.gender==="female"?"#F9E8ED":"#E8EDF5"} color={member.gender==="female"?C.female:C.male}>{member.gender==="female"?"여성":"남성"}</Tag></>
+              <Tag bg={member.gender==="female"?"#F9E8ED":"#E8EDF5"} color={member.gender==="female"?C.female:C.male}>
+                {member.gender==="female"?"여성":"남성"}
+              </Tag></>
             :"전체 회원 ("+members.length+"명)"}
         </div>
         <button onClick={()=>setShowSettings(!showSettings)}
-          style={{background:C.accentL,border:"none",borderRadius:20,padding:"5px 14px",fontSize:12,color:C.accent,cursor:"pointer",fontWeight:600}}>
+          style={{background:C.accentL,border:"none",borderRadius:20,padding:"5px 14px",
+            fontSize:12,color:C.accent,cursor:"pointer",fontWeight:600}}>
           ⚙ 설정
         </button>
       </div>
@@ -928,7 +996,7 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
           <div style={{marginBottom:16}}>
             <div style={{fontSize:12,color:C.mid,marginBottom:6,fontWeight:600}}>Gemini API 키</div>
             <div style={{display:"flex",gap:8}}>
-              <KInput value={apiDraft} onChange={setApiDraft} placeholder={apiKey?"저장됨 (변경하려면 입력)":"API 키 입력"} type="password"/>
+              <KInput value={apiDraft} onChange={setApiDraft} placeholder={apiKey?"저장됨":"API 키 입력"} type="password"/>
               <Btn size="sm" onClick={()=>{setApiKey(apiDraft);alert("저장됐어요!");}}>저장</Btn>
             </div>
             {apiKey&&<div style={{fontSize:11,color:C.ok,marginTop:4}}>✓ API 키 설정됨</div>}
@@ -962,16 +1030,25 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
                 onDelete={deleteMember} delId={delId} setDelId={setDelId}/>
             ))}
           </div>
-          {!showMemberForm&&<div style={{marginTop:12}}><Btn variant="outline" full onClick={()=>{setShowMemberForm(true);setEditingMember(null);}}>+ 회원 추가</Btn></div>}
+          {!showMemberForm&&<div style={{marginTop:12}}>
+            <Btn variant="outline" full onClick={()=>{setShowMemberForm(true);setEditingMember(null);}}>+ 회원 추가</Btn>
+          </div>}
         </div>
       )}
 
       {selected&&member&&(
         <div>
-          <div style={{fontSize:12,color:C.light,marginBottom:16}}>{member.goal}{member.memo&&" · "+member.memo}</div>
-          {loadingDetail?<Spinner/>:(
-            <WeeklyView member={member} records={memberRecords} onUpdate={updateRecord} apiKey={apiKey}
-              coachPrompt={coachPrompt+(member.personalPrompt?"\n\n이 회원 개별 참고사항:\n"+member.personalPrompt:"")}/>
+          <div style={{fontSize:12,color:C.light,marginBottom:16}}>
+            {member.goal}{member.memo&&" · "+member.memo}
+          </div>
+          {loading?<Spinner/>:(
+            <MemberDetailView
+              member={member}
+              records={memberRecords}
+              onUpdate={updateRecord}
+              apiKey={apiKey}
+              coachPrompt={coachPrompt+(member.personalPrompt?"\n\n이 회원 개별 참고사항:\n"+member.personalPrompt:"")}
+            />
           )}
         </div>
       )}
@@ -1033,10 +1110,8 @@ function App(){
       setSession({role:"coach"});
       const ms=await apiLoadMembers();
       setMembers(ms);
-      if(ms.length>0){
-        const recs=await apiLoadAllRecords(ms.map(m=>m.id));
-        setAllRecords(recs);
-      }
+      const recs=await apiLoadAllRecords(ms.map(m=>m.id));
+      setAllRecords(recs);
       return;
     }
     const m=members.find(m=>m.name===name&&m.pin===pin);
@@ -1058,7 +1133,7 @@ function App(){
   return(
     <div style={{minHeight:"100vh",background:C.bg}}>
       <div style={{background:C.card,borderBottom:"1px solid "+C.border,position:"sticky",top:0,zIndex:100}}>
-        <div style={{maxWidth:isCoach?1100:720,margin:"0 auto",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{maxWidth:isCoach?1200:720,margin:"0 auto",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div style={{fontFamily:"Georgia,serif",fontSize:20,fontStyle:"italic",color:C.accent,letterSpacing:1}}>DietDesign</div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             {!isCoach&&<span style={{fontSize:13,color:C.mid}}>{curMember?.name}님</span>}
@@ -1067,7 +1142,7 @@ function App(){
           </div>
         </div>
       </div>
-      <div style={{maxWidth:isCoach?1100:720,margin:"0 auto",padding:"24px 20px 60px"}}>
+      <div style={{maxWidth:isCoach?1200:720,margin:"0 auto",padding:"24px 20px 60px"}}>
         {!isCoach&&curMember&&<MemberHome member={curMember} records={memberRecords} onSave={saveMyRecord}/>}
         {isCoach&&<CoachDashboard members={members} setMembers={setMembers} allRecords={allRecords} setAllRecords={setAllRecords} apiKey={apiKey} setApiKey={setApiKey} coachPrompt={coachPrompt} setCoachPrompt={setCoachPrompt}/>}
       </div>
