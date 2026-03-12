@@ -1,4 +1,4 @@
-<!-- DietDesign v18 -->
+<!-- DietDesign v19 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -116,14 +116,14 @@ async function apiLoadMembers(){
     id:String(r[0]),name:String(r[1]),gender:String(r[2]),
     age:Number(r[3]),goal:String(r[4]||""),
     startWeight:Number(r[5]),targetWeight:Number(r[6]),
-    pin:String(r[7]),memo:String(r[8]||""),personalPrompt:String(r[9]||""),
+    pin:String(r[7]),memo:String(r[8]||""),
   }));
 }
 
 async function apiSaveMembers(members){
   for(let i=0;i<members.length;i++){
     const m=members[i];
-    await sheetWrite("members",i+1,[m.id,m.name,m.gender,m.age,m.goal,m.startWeight,m.targetWeight,m.pin,m.memo,m.personalPrompt||""]);
+    await sheetWrite("members",i+1,[m.id,m.name,m.gender,m.age,m.goal,m.startWeight,m.targetWeight,m.pin,m.memo]);
   }
 }
 
@@ -866,8 +866,8 @@ function MemberDetailView({member,records,onUpdate,apiKey,geminiModel,coachPromp
         onUpdate={onUpdate} showPhotoModal={setPhotoModal} isReadOnly={false}/>
       <WeightChart member={member} records={records} dates={displayDates}/>
       {viewMode==="weekly"&&(
-        <AIReport member={member} records={records} apiKey={apiKey} geminiModel={geminiModel} geminiModel={geminiModel}
-          coachPrompt={coachPrompt+(member.personalPrompt?"\n\n이 회원 개별 참고사항:\n"+member.personalPrompt:"")}/>
+        <AIReport member={member} records={records} apiKey={apiKey} geminiModel={geminiModel}
+          coachPrompt={coachPrompt}/>
       )}
       {photoModal&&(
         <div onClick={function(){setPhotoModal(null);}}
@@ -961,7 +961,7 @@ function MemberCard({member,records,onSelect,onEdit,onDelete,delId,setDelId}){
 
 // ── 회원 추가/수정 폼 ─────────────────────────────────────────────────────────
 function MemberForm({initial,onSave,onCancel,saving}){
-  const [d,setD]=useState(initial||{name:"",gender:"female",age:"",goal:"",startWeight:"",targetWeight:"",pin:"",memo:"",personalPrompt:""});
+  const [d,setD]=useState(initial||{name:"",gender:"female",age:"",goal:"",startWeight:"",targetWeight:"",pin:"",memo:""});
   var f=function(k){return function(v){setD(function(p){return Object.assign({},p,{[k]:v});});};};
   return(
     <Card style={{marginBottom:16,border:"1.5px solid "+C.accent}}>
@@ -981,12 +981,6 @@ function MemberForm({initial,onSave,onCancel,saving}){
       </div>
       <div style={{marginBottom:10}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>목표</div><KInput value={d.goal} onChange={f("goal")} placeholder="식욕 안정 & 체지방 감량"/></div>
       <div style={{marginBottom:10}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>특이사항</div><KInput value={d.memo} onChange={f("memo")} placeholder="무릎 주의, 갑상선약 복용"/></div>
-      <div style={{marginBottom:14}}>
-        <div style={{fontSize:12,color:C.mid,marginBottom:4}}>개별 AI 참고사항</div>
-        <textarea value={d.personalPrompt} onChange={function(e){setD(function(p){return Object.assign({},p,{personalPrompt:e.target.value});});}}
-          placeholder="예: 폭식 이력 있음. 격려 위주 피드백 필요."
-          style={Object.assign({},inputStyle,{minHeight:72,resize:"vertical"})}/>
-      </div>
       <div style={{display:"flex",gap:8}}>
         <Btn size="sm" onClick={function(){onSave(d);}} disabled={saving}>{saving?"저장 중...":initial?"수정 저장":"추가"}</Btn>
         <Btn size="sm" variant="ghost" onClick={onCancel}>취소</Btn>
@@ -1142,8 +1136,8 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
           <div style={{fontSize:12,color:C.light,marginBottom:16}}>{member.goal}{member.memo&&" · "+member.memo}</div>
           {loading?<Spinner/>:(
             <MemberDetailView member={member} records={memberRecords} onUpdate={updateRecord}
-              apiKey={apiKey} geminiModel={geminiModel} geminiModel={geminiModel}
-              coachPrompt={coachPrompt+(member.personalPrompt?"\n\n이 회원 개별 참고사항:\n"+member.personalPrompt:"")}/>
+              apiKey={apiKey} geminiModel={geminiModel}
+              coachPrompt={coachPrompt}/>
           )}
         </div>
       )}
@@ -1200,7 +1194,7 @@ function App(){
   const [allRecords,setAllRecords]=useState({});
   const [loading,setLoading]=useState(true);
   const [apiKey,setApiKey]=useState(function(){return localStorage.getItem("dd_apikey")||"";});
-  const [geminiModel,setGeminiModel]=useState(function(){return localStorage.getItem("dd_model")||GEMINI_MODEL_DEFAULT;});
+  const [geminiModel,setGeminiModel]=useState(function(){return localStorage.getItem("dd_model")||DEFAULT_MODEL;});
   const [coachPrompt,setCoachPrompt]=useState(DEFAULT_PROMPT);
 
   useEffect(function(){apiLoadMembers().then(function(m){setMembers(m);setLoading(false);});},[]);
