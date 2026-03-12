@@ -1,4 +1,4 @@
-<!-- DietDesign v19 -->
+<!-- DietDesign v20 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -32,13 +32,7 @@ const C={
 
 const COACH_PW = "coach1234";
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8LKermR-eSp23YxYKDsJHwh15jDfuadEXSCI62Als9qRwn6UazuBV1MI11VR6-Ok_/exec";
-const GEMINI_MODELS = [
-  {label:"Gemini 3 Flash Preview (기본)", value:"gemini-2.5-flash-preview-04-17"},
-  {label:"Gemini 3.1 Pro Preview", value:"gemini-2.5-pro-preview-05-06"},
-  {label:"Gemini 3.1 Flash Lite Preview", value:"gemini-2.5-flash-lite-preview-06-17"},
-  {label:"Gemini 3 Flash Preview (구)", value:"gemini-2.0-flash"},
-];
-const DEFAULT_MODEL = "gemini-2.5-flash-preview-04-17";
+const DEFAULT_MODEL = "gemini-3-flash-preview";
 
 function getToday(){
   const d=new Date();
