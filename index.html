@@ -1,4 +1,4 @@
-<!-- DietDesign v11 -->
+<!-- DietDesign v12 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -1065,7 +1065,7 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
             <div style={{fontSize:12,color:C.mid,marginBottom:6,fontWeight:600}}>Gemini API 키</div>
             <div style={{display:"flex",gap:8}}>
               <KInput value={apiDraft} onChange={setApiDraft} placeholder={apiKey?"저장됨":"API 키 입력"} type="password"/>
-              <Btn size="sm" onClick={()=>{setApiKey(apiDraft);alert("저장됐어요!");}}>저장</Btn>
+              <Btn size="sm" onClick={()=>{setApiKey(apiDraft);localStorage.setItem("dd_apikey",apiDraft);alert("저장됐어요!");}}>저장</Btn>
             </div>
             {apiKey&&<div style={{fontSize:11,color:C.ok,marginTop:4}}>✓ API 키 설정됨</div>}
           </div>
@@ -1168,7 +1168,7 @@ function App(){
   const [memberRecords,setMemberRecords]=useState({});
   const [allRecords,setAllRecords]=useState({});
   const [loading,setLoading]=useState(true);
-  const [apiKey,setApiKey]=useState("");
+  const [apiKey,setApiKey]=useState(()=>localStorage.getItem("dd_apikey")||"");
   const [coachPrompt,setCoachPrompt]=useState(DEFAULT_PROMPT);
 
   useEffect(()=>{apiLoadMembers().then(m=>{setMembers(m);setLoading(false);});},[]);
