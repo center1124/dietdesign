@@ -1,4 +1,4 @@
-<!-- DietDesign v10 -->
+<!-- DietDesign v11 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -511,30 +511,98 @@ function RecordForm({member,date,record,onSave,onDateChange}){
 
 // ── 회원 홈 ───────────────────────────────────────────────────────────────────
 function MemberHome({member,records,onSave}){
+  const [tab,setTab]=useState("write");
   const [selectedDate,setSelectedDate]=useState(TODAY);
+  const [viewMode,setViewMode]=useState("weekly");
+  const now=new Date();
+  const [monthYear,setMonthYear]=useState({year:now.getFullYear(),month:now.getMonth()+1});
 
-  const handleDateChange=d=>{
+  const weekDates=getLast7Days();
+  const monthDates=getDatesOfMonth(monthYear.year,monthYear.month);
+  const displayDates=viewMode==="weekly"?weekDates:monthDates;
+
+  const prevMonth=()=>setMonthYear(p=>{const m=p.month-1;return m<1?{year:p.year-1,month:12}:{year:p.year,month:m};});
+  const nextMonth=()=>setMonthYear(p=>{const m=p.month+1;return m>12?{year:p.year+1,month:1}:{year:p.year,month:m};});
+
+  // 날짜 클릭 시 기록하기 탭으로 이동
+  const goToDate=d=>{
     setSelectedDate(d);
-  };
-
-  const handleSave=async(date,rec)=>{
-    await onSave(date,rec);
+    setTab("write");
   };
 
   return(
-    <RecordForm
-      key={selectedDate}
-      member={member}
-      date={selectedDate}
-      record={records[selectedDate]}
-      onSave={handleSave}
-      onDateChange={handleDateChange}
-    />
+    <div>
+      {/* 탭 */}
+      <div style={{display:"flex",borderBottom:"2px solid "+C.border,marginBottom:20}}>
+        {[["write","기록하기"],["view","내 기록 보기"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)}
+            style={{padding:"10px 20px",border:"none",background:"none",cursor:"pointer",fontSize:14,
+              fontWeight:tab===k?700:400,color:tab===k?C.accent:C.mid,
+              borderBottom:"2px solid "+(tab===k?C.accent:"transparent"),marginBottom:-2}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {tab==="write"&&(
+        <RecordForm
+          key={selectedDate}
+          member={member}
+          date={selectedDate}
+          record={records[selectedDate]}
+          onSave={async(date,rec)=>{await onSave(date,rec);}}
+          onDateChange={setSelectedDate}
+        />
+      )}
+
+      {tab==="view"&&(
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          {/* 뷰 전환 */}
+          <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <div style={{display:"flex",border:"1.5px solid "+C.border,borderRadius:8,overflow:"hidden"}}>
+              {[["weekly","주간"],["monthly","월간"]].map(([k,l])=>(
+                <button key={k} onClick={()=>setViewMode(k)}
+                  style={{padding:"7px 18px",border:"none",cursor:"pointer",fontSize:13,fontWeight:viewMode===k?700:400,
+                    background:viewMode===k?C.accent:"transparent",color:viewMode===k?"#fff":C.mid}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {viewMode==="monthly"&&(
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <Btn size="sm" variant="ghost" onClick={prevMonth}>◀</Btn>
+                <span style={{fontWeight:700,fontSize:14}}>{monthYear.year}년 {monthYear.month}월</span>
+                <Btn size="sm" variant="ghost" onClick={nextMonth}>▶</Btn>
+              </div>
+            )}
+            {viewMode==="weekly"&&<span style={{fontSize:12,color:C.light}}>최근 7일</span>}
+          </div>
+
+          {/* 안내 */}
+          <div style={{fontSize:12,color:C.light,background:C.accentL,borderRadius:8,padding:"8px 14px"}}>
+            날짜를 수정하려면 해당 날짜 → <b style={{color:C.accent}}>기록하기</b> 탭에서 수정하세요
+          </div>
+
+          {/* 테이블 (읽기 전용, 코멘트는 코치 코멘트 표시만) */}
+          <RecordTable
+            member={member}
+            records={records}
+            dates={displayDates}
+            onUpdate={()=>{}}
+            showPhotoModal={()=>{}}
+            isReadOnly={true}
+          />
+
+          {/* 체중 그래프 */}
+          <WeightChart member={member} records={records} dates={displayDates}/>
+        </div>
+      )}
+    </div>
   );
 }
 
 // ── 주간/월간 테이블 (코치) ───────────────────────────────────────────────────
-function RecordTable({member,records,dates,onUpdate,showPhotoModal}){
+function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly=false}){
   const DAY_KR=["일","월","화","수","목","금","토"];
   const [editComment,setEditComment]=useState(null);
   const [commentDraft,setCommentDraft]=useState("");
@@ -630,7 +698,7 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal}){
                 <td key={d} style={{padding:"5px 4px",verticalAlign:"top",
                   borderLeft:"1px solid "+C.border,
                   background:d===TODAY?"#FFFDF9":"transparent"}}>
-                  {editComment===d?(
+                  {!isReadOnly&&editComment===d?(
                     <div>
                       <textarea value={commentDraft} onChange={e=>setCommentDraft(e.target.value)}
                         style={{width:"100%",minHeight:56,fontSize:10,border:"1px solid "+C.border,
@@ -641,11 +709,11 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal}){
                       </div>
                     </div>
                   ):(
-                    <div onClick={()=>records[d]&&(setEditComment(d),setCommentDraft(records[d]?.coachComment||""))}
-                      style={{cursor:records[d]?"pointer":"default",minHeight:20}}>
+                    <div onClick={()=>!isReadOnly&&records[d]&&(setEditComment(d),setCommentDraft(records[d]?.coachComment||""))}
+                      style={{cursor:(!isReadOnly&&records[d])?"pointer":"default",minHeight:20}}>
                       {records[d]?.coachComment
-                        ?<div style={{fontSize:9,color:C.accentD,lineHeight:1.5}}>{records[d].coachComment}</div>
-                        :records[d]?<div style={{fontSize:9,color:C.border}}>+ 추가</div>:null}
+                        ?<div style={{fontSize:9,color:C.accentD,lineHeight:1.5,fontStyle:isReadOnly?"italic":"normal"}}>{records[d].coachComment}</div>
+                        :(!isReadOnly&&records[d])?<div style={{fontSize:9,color:C.border}}>+ 추가</div>:null}
                     </div>
                   )}
                 </td>
