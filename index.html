@@ -1,4 +1,4 @@
-<!-- DietDesign v16 -->
+<!-- DietDesign v18 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -32,7 +32,13 @@ const C={
 
 const COACH_PW = "coach1234";
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8LKermR-eSp23YxYKDsJHwh15jDfuadEXSCI62Als9qRwn6UazuBV1MI11VR6-Ok_/exec";
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_MODELS = [
+  {label:"Gemini 3 Flash Preview (기본)", value:"gemini-2.5-flash-preview-04-17"},
+  {label:"Gemini 3.1 Pro Preview", value:"gemini-2.5-pro-preview-05-06"},
+  {label:"Gemini 3.1 Flash Lite Preview", value:"gemini-2.5-flash-lite-preview-06-17"},
+  {label:"Gemini 3 Flash Preview (구)", value:"gemini-2.0-flash"},
+];
+const DEFAULT_MODEL = "gemini-2.5-flash-preview-04-17";
 
 function getToday(){
   const d=new Date();
@@ -162,13 +168,13 @@ async function apiSaveRecord(memberId,date,record){
   }
 }
 
-async function callGemini(apiKey,prompt){
+async function callGemini(apiKey,prompt,model){
   try{
     const body={
       contents:[{parts:[{text:prompt}]}],
       generationConfig:{temperature:0.7,maxOutputTokens:1024}
     };
-    const url="https://generativelanguage.googleapis.com/v1beta/models/"+GEMINI_MODEL+":generateContent?key="+apiKey;
+    const url="https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent?key="+apiKey;
     const res=await fetch(url,{
       method:"POST",
       headers:{"Content-Type":"application/json"},
@@ -769,7 +775,7 @@ function MemberHome({member,records,onSave}){
 }
 
 // ── AI 리포트 ─────────────────────────────────────────────────────────────────
-function AIReport({member,records,apiKey,coachPrompt}){
+function AIReport({member,records,apiKey,geminiModel,coachPrompt}){
   const [report,setReport]=useState(null);
   const [genning,setGenning]=useState(false);
 
@@ -795,7 +801,7 @@ function AIReport({member,records,apiKey,coachPrompt}){
       +"\n\n최근 7일 데이터:\n"+JSON.stringify(weekData)
       +"\n\n반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트 없이:\n"+jsonSchema;
 
-    var r=await callGemini(apiKey,prompt);
+    var r=await callGemini(apiKey,prompt,geminiModel||DEFAULT_MODEL);
     setReport(r);setGenning(false);
   };
 
@@ -843,7 +849,7 @@ function AIReport({member,records,apiKey,coachPrompt}){
 }
 
 // ── 코치 회원 상세 ────────────────────────────────────────────────────────────
-function MemberDetailView({member,records,onUpdate,apiKey,coachPrompt}){
+function MemberDetailView({member,records,onUpdate,apiKey,geminiModel,coachPrompt}){
   var now=new Date();
   const [viewMode,setViewMode]=useState("weekly");
   const [monthYear,setMonthYear]=useState({year:now.getFullYear(),month:now.getMonth()+1});
@@ -860,7 +866,7 @@ function MemberDetailView({member,records,onUpdate,apiKey,coachPrompt}){
         onUpdate={onUpdate} showPhotoModal={setPhotoModal} isReadOnly={false}/>
       <WeightChart member={member} records={records} dates={displayDates}/>
       {viewMode==="weekly"&&(
-        <AIReport member={member} records={records} apiKey={apiKey}
+        <AIReport member={member} records={records} apiKey={apiKey} geminiModel={geminiModel} geminiModel={geminiModel}
           coachPrompt={coachPrompt+(member.personalPrompt?"\n\n이 회원 개별 참고사항:\n"+member.personalPrompt:"")}/>
       )}
       {photoModal&&(
@@ -990,7 +996,7 @@ function MemberForm({initial,onSave,onCancel,saving}){
 }
 
 // ── 코치 대시보드 ─────────────────────────────────────────────────────────────
-function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setApiKey,coachPrompt,setCoachPrompt}){
+function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setApiKey,geminiModel,setGeminiModel,coachPrompt,setCoachPrompt}){
   const [selected,setSelected]=useState(null);
   const [loading,setLoading]=useState(false);
   const [showSettings,setShowSettings]=useState(false);
@@ -1000,6 +1006,7 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
   const [saving,setSaving]=useState(false);
   const [promptDraft,setPromptDraft]=useState(coachPrompt);
   const [apiDraft,setApiDraft]=useState("");
+  const [modelDraft,setModelDraft]=useState(geminiModel);
 
   var member=members.find(function(m){return m.id===selected;});
   var memberRecords=selected?(allRecords[selected]||{}):{};
@@ -1077,6 +1084,24 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
             </div>
             {apiKey&&<div style={{fontSize:11,color:C.ok,marginTop:4}}>API 키 설정됨</div>}
           </div>
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:12,color:C.mid,marginBottom:4,fontWeight:600}}>Gemini 모델명</div>
+            <div style={{display:"flex",gap:8}}>
+              <KInput value={modelDraft} onChange={setModelDraft} placeholder="모델명 입력"/>
+              <Btn size="sm" onClick={function(){
+                if(!modelDraft.trim())return;
+                setGeminiModel(modelDraft.trim());
+                localStorage.setItem("dd_model",modelDraft.trim());
+                alert("저장됐어요!");
+              }}>저장</Btn>
+            </div>
+            <div style={{fontSize:11,color:C.light,marginTop:4}}>현재: {geminiModel}</div>
+            <div style={{fontSize:11,color:C.light,marginTop:2}}>
+              {"사용 가능한 모델은 "}
+              <a href="https://aistudio.google.com" target="_blank" style={{color:C.accent}}>Google AI Studio</a>
+              {"에서 확인"}
+            </div>
+          </div>
           <div>
             <div style={{fontSize:12,color:C.mid,marginBottom:4,fontWeight:600}}>공통 AI 코칭 방향</div>
             <textarea value={promptDraft} onChange={function(e){setPromptDraft(e.target.value);}}
@@ -1117,7 +1142,7 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
           <div style={{fontSize:12,color:C.light,marginBottom:16}}>{member.goal}{member.memo&&" · "+member.memo}</div>
           {loading?<Spinner/>:(
             <MemberDetailView member={member} records={memberRecords} onUpdate={updateRecord}
-              apiKey={apiKey}
+              apiKey={apiKey} geminiModel={geminiModel} geminiModel={geminiModel}
               coachPrompt={coachPrompt+(member.personalPrompt?"\n\n이 회원 개별 참고사항:\n"+member.personalPrompt:"")}/>
           )}
         </div>
@@ -1175,6 +1200,7 @@ function App(){
   const [allRecords,setAllRecords]=useState({});
   const [loading,setLoading]=useState(true);
   const [apiKey,setApiKey]=useState(function(){return localStorage.getItem("dd_apikey")||"";});
+  const [geminiModel,setGeminiModel]=useState(function(){return localStorage.getItem("dd_model")||GEMINI_MODEL_DEFAULT;});
   const [coachPrompt,setCoachPrompt]=useState(DEFAULT_PROMPT);
 
   useEffect(function(){apiLoadMembers().then(function(m){setMembers(m);setLoading(false);});},[]);
@@ -1218,7 +1244,7 @@ function App(){
       </div>
       <div style={{maxWidth:isCoach?1200:720,margin:"0 auto",padding:"24px 20px 60px"}}>
         {!isCoach&&curMember&&<MemberHome member={curMember} records={memberRecords} onSave={saveMyRecord}/>}
-        {isCoach&&<CoachDashboard members={members} setMembers={setMembers} allRecords={allRecords} setAllRecords={setAllRecords} apiKey={apiKey} setApiKey={setApiKey} coachPrompt={coachPrompt} setCoachPrompt={setCoachPrompt}/>}
+        {isCoach&&<CoachDashboard members={members} setMembers={setMembers} allRecords={allRecords} setAllRecords={setAllRecords} apiKey={apiKey} setApiKey={setApiKey} geminiModel={geminiModel} setGeminiModel={setGeminiModel} coachPrompt={coachPrompt} setCoachPrompt={setCoachPrompt}/>}
       </div>
     </div>
   );
