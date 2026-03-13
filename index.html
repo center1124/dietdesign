@@ -1,4 +1,4 @@
-<!-- DietDesign v28 -->
+<!-- DietDesign v30 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -578,7 +578,7 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly}){
   return(
     <Card style={{padding:0,overflow:"hidden"}}>
       <div className="scrollx">
-        <table style={{width:"100%",borderCollapse:"collapse",minWidth:Math.max(500,dates.length*90)}}>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:60+dates.length*110}}>
           <thead>
             <tr style={{background:C.alt}}>
               <th style={{padding:"10px 14px",fontSize:11,color:C.mid,fontWeight:700,textAlign:"left",
@@ -590,7 +590,7 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly}){
                 return(
                   <th key={d} style={{padding:"8px 4px",textAlign:"center",
                     borderBottom:"1px solid "+C.border,
-                    background:isToday?C.accentL:C.alt,minWidth:80,
+                    background:isToday?C.accentL:C.alt,minWidth:110,
                     borderLeft:"1px solid "+C.border}}>
                     <div style={{fontSize:11,fontWeight:700,color:dow===0?C.danger:dow===6?C.male:isToday?C.accent:C.mid}}>{DAY_KR[dow]}</div>
                     <div style={{fontSize:10,color:C.mid,fontWeight:isToday?700:400}}>{d.slice(5)}</div>
@@ -638,17 +638,18 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly}){
             </tr>
             <tr>
               <td style={{padding:"8px 14px",fontSize:11,color:C.accent,fontWeight:600,
-                background:C.alt,verticalAlign:"top",position:"sticky",left:0,zIndex:1}}>코멘트</td>
+                background:C.alt,verticalAlign:"top",position:"sticky",left:0,zIndex:1,
+                borderBottom:"1px solid "+C.border}}>코멘트</td>
               {dates.map(function(d){
                 return(
                   <td key={d} style={{padding:"5px 4px",verticalAlign:"top",
-                    borderLeft:"1px solid "+C.border,
+                    borderLeft:"1px solid "+C.border,borderBottom:"1px solid "+C.border,
                     background:d===TODAY?"#FFFDF9":"transparent"}}>
                     {!ro&&editComment===d?(
                       <div>
                         <textarea value={commentDraft} onChange={function(e){setCommentDraft(e.target.value);}}
-                          style={{width:"100%",minHeight:120,fontSize:11,border:"1px solid "+C.border,
-                            borderRadius:6,padding:6,fontFamily:"inherit",resize:"vertical"}} autoFocus/>
+                          style={{width:"100%",minHeight:56,fontSize:9,border:"1px solid "+C.border,
+                            borderRadius:6,padding:4,fontFamily:"inherit",resize:"vertical"}} autoFocus/>
                         <div style={{display:"flex",gap:3,marginTop:3}}>
                           <Btn size="sm" onClick={function(){saveComment(d);}} disabled={savingC} style={{fontSize:10,padding:"3px 7px"}}>{savingC?"저장중":"저장"}</Btn>
                           <Btn size="sm" variant="ghost" onClick={function(){setEditComment(null);}} style={{fontSize:10,padding:"3px 7px"}}>취소</Btn>
