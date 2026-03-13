@@ -1,4 +1,4 @@
-<!-- DietDesign v27 -->
+<!-- DietDesign v28 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -647,8 +647,8 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly}){
                     {!ro&&editComment===d?(
                       <div>
                         <textarea value={commentDraft} onChange={function(e){setCommentDraft(e.target.value);}}
-                          style={{width:"100%",minHeight:56,fontSize:10,border:"1px solid "+C.border,
-                            borderRadius:6,padding:4,fontFamily:"inherit",resize:"none"}} autoFocus/>
+                          style={{width:"100%",minHeight:120,fontSize:11,border:"1px solid "+C.border,
+                            borderRadius:6,padding:6,fontFamily:"inherit",resize:"vertical"}} autoFocus/>
                         <div style={{display:"flex",gap:3,marginTop:3}}>
                           <Btn size="sm" onClick={function(){saveComment(d);}} disabled={savingC} style={{fontSize:10,padding:"3px 7px"}}>{savingC?"저장중":"저장"}</Btn>
                           <Btn size="sm" variant="ghost" onClick={function(){setEditComment(null);}} style={{fontSize:10,padding:"3px 7px"}}>취소</Btn>
