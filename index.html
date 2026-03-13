@@ -1,4 +1,4 @@
-<!-- DietDesign v30 -->
+<!-- DietDesign v31 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -811,7 +811,9 @@ function AIReport({member,records,apiKey,geminiModel,coachPrompt}){
       var r=records[d];if(!r)return null;
       return{date:d,weight:r.weight,sleep:r.sleep&&r.sleep.total,period:r.period,
         meals:r.meals&&r.meals.map(function(m){return{food:m.food,hunger:m.hungerBefore,satiety:m.satietyAfter};}),
-        exercise:r.exercise&&r.exercise.map(function(e){return e.note;})};
+        exercise:r.exercise&&r.exercise.map(function(e){return{time:e.time,note:e.note};}),
+        memberComment:r.memberComment||null,
+        coachComment:r.coachComment||null};
     }).filter(Boolean);
 
     var jsonSchema=member.gender==="female"
