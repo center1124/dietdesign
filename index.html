@@ -1,4 +1,4 @@
-<!-- DietDesign v31 -->
+<!-- DietDesign v32 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -104,6 +104,13 @@ async function sheetWrite(sheet,row,values){
   }catch{return false;}
 }
 
+async function sheetDelete(sheet,row){
+  try{
+    await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify({action:"delete",sheet,row})});
+    return true;
+  }catch{return false;}
+}
+
 async function apiLoadMembers(){
   const rows=await sheetGet("members");
   return rows.filter(r=>r[0]).map(r=>({
@@ -111,14 +118,36 @@ async function apiLoadMembers(){
     age:Number(r[3]),goal:String(r[4]||""),
     startWeight:Number(r[5]),targetWeight:Number(r[6]),
     pin:String(r[7]),memo:String(r[8]||""),
+    hasPeriod:r[9]==="true"||r[9]===true,
   }));
 }
 
 async function apiSaveMembers(members){
   for(let i=0;i<members.length;i++){
     const m=members[i];
-    await sheetWrite("members",i+1,[m.id,m.name,m.gender,m.age,m.goal,m.startWeight,m.targetWeight,m.pin,m.memo]);
+    await sheetWrite("members",i+1,[m.id,m.name,m.gender,m.age,m.goal,m.startWeight,m.targetWeight,m.pin,m.memo,m.hasPeriod?"true":"false"]);
   }
+}
+
+
+async function apiLoadPeriods(memberId){
+  const rows=await sheetGet("periods");
+  return rows.filter(r=>String(r[0])===memberId).map(r=>normalizeDate(r[1])).filter(Boolean).sort();
+}
+
+async function apiSavePeriod(memberId,startDate){
+  const rows=await sheetGet("periods");
+  const exists=rows.some(r=>String(r[0])===memberId&&normalizeDate(r[1])===startDate);
+  if(exists)return;
+  const nextRow=rows.length+1;
+  await sheetWrite("periods",nextRow,[memberId,startDate]);
+}
+
+async function apiDeletePeriod(memberId,startDate){
+  const rows=await sheetGet("periods");
+  const idx=rows.findIndex(r=>String(r[0])===memberId&&normalizeDate(r[1])===startDate);
+  if(idx<0)return;
+  await sheetDelete("periods",idx+1);
 }
 
 async function apiLoadRecords(memberId){
@@ -314,12 +343,7 @@ function MealForm({initial,onSave,onCancel,label}){
   const [food,setFood]=useState((initial&&initial.food)||"");
   const [hunger,setHunger]=useState((initial&&initial.hungerBefore)||5);
   const [satiety,setSatiety]=useState((initial&&initial.satietyAfter)||7);
-  const [photo,setPhoto]=useState((initial&&initial.photo)||null);
-  const fileRef=useRef();
-  const handlePhoto=e=>{
-    const f=e.target.files[0];if(!f)return;
-    const r=new FileReader();r.onload=ev=>setPhoto(ev.target.result);r.readAsDataURL(f);
-  };
+
   return(
     <div style={{background:C.alt,borderRadius:10,padding:14,border:"1px solid "+C.border,marginBottom:10}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:10,marginBottom:10}}>
@@ -330,14 +354,8 @@ function MealForm({initial,onSave,onCancel,label}){
         <Slider label="식전 공복감" value={hunger} onChange={setHunger}/>
         <Slider label="식후 포만감" value={satiety} onChange={setSatiety}/>
       </div>
-      <div style={{marginBottom:12}}>
-        <input ref={fileRef} type="file" accept="image/*" onChange={handlePhoto} style={{display:"none"}}/>
-        {photo
-          ?<img src={photo} alt="" onClick={()=>fileRef.current&&fileRef.current.click()} style={{width:72,height:72,objectFit:"cover",borderRadius:8,cursor:"pointer"}}/>
-          :<Btn size="sm" variant="outline" onClick={()=>fileRef.current&&fileRef.current.click()}>📷 사진</Btn>}
-      </div>
       <div style={{display:"flex",gap:8}}>
-        <Btn size="sm" onClick={()=>{if(!food.trim())return;onSave({time,food,hungerBefore:hunger,satietyAfter:satiety,photo});}}>{label||"추가"}</Btn>
+        <Btn size="sm" onClick={()=>{if(!food.trim())return;onSave({time,food,hungerBefore:hunger,satietyAfter:satiety});}}>{label||"추가"}</Btn>
         <Btn size="sm" variant="ghost" onClick={onCancel}>취소</Btn>
       </div>
     </div>
@@ -363,13 +381,138 @@ function ExForm({initial,onSave,onCancel,label}){
 }
 
 // ── 기록 폼 ───────────────────────────────────────────────────────────────────
+
+// ── 생리 시작일 버튼 ──────────────────────────────────────────────────────────
+function PeriodStartButton({memberId,date}){
+  const [periods,setPeriods]=useState(null);
+  const [saving,setSaving]=useState(false);
+
+  useEffect(function(){
+    apiLoadPeriods(memberId).then(function(p){setPeriods(p);});
+  },[memberId]);
+
+  var isStart=periods&&periods.includes(date);
+
+  var toggle=async function(){
+    setSaving(true);
+    if(isStart){
+      await apiDeletePeriod(memberId,date);
+      setPeriods(function(p){return p.filter(function(d){return d!==date;});});
+    }else{
+      await apiSavePeriod(memberId,date);
+      setPeriods(function(p){return p.concat([date]).sort();});
+    }
+    setSaving(false);
+  };
+
+  if(periods===null)return <span style={{fontSize:12,color:C.light}}>불러오는 중...</span>;
+
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:10}}>
+      <button onClick={toggle} disabled={saving}
+        style={{padding:"7px 16px",borderRadius:20,border:"1.5px solid "+C.female,
+          background:isStart?C.female:"transparent",
+          color:isStart?"#fff":C.female,
+          fontSize:12,fontWeight:700,cursor:"pointer"}}>
+        {saving?"저장 중...":isStart?"✓ 생리 시작일로 기록됨":"생리 시작일로 기록하기"}
+      </button>
+      {periods.length>=2&&(
+        <span style={{fontSize:11,color:C.light}}>
+          최근 주기 {calcAvgCycle(periods)}일
+        </span>
+      )}
+    </div>
+  );
+}
+
+
+function PeriodAddInput({memberId,periods,setPeriods}){
+  const [date,setDate]=useState("");
+  const [saving,setSaving]=useState(false);
+
+  var add=async function(){
+    if(!date)return;
+    if(periods.includes(date)){alert("이미 등록된 날짜입니다.");return;}
+    setSaving(true);
+    await apiSavePeriod(memberId,date);
+    setPeriods&&setPeriods(function(p){return p.concat([date]).sort();});
+    setDate("");
+    setSaving(false);
+  };
+
+  return(
+    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+      <input type="date" value={date} max={TODAY}
+        onChange={function(e){setDate(e.target.value);}}
+        style={Object.assign({},inputStyle,{maxWidth:160,fontSize:12})}/>
+      <Btn size="sm" onClick={add} disabled={saving||!date}
+        style={{background:C.female,color:"#fff",borderColor:C.female}}>
+        {saving?"저장 중...":"+ 추가"}
+      </Btn>
+    </div>
+  );
+}
+
+function calcAvgCycle(sortedDates){
+  if(sortedDates.length<2)return null;
+  var diffs=[];
+  for(var i=1;i<sortedDates.length;i++){
+    var a=new Date(sortedDates[i-1]),b=new Date(sortedDates[i]);
+    diffs.push(Math.round((b-a)/(1000*60*60*24)));
+  }
+  return Math.round(diffs.reduce(function(s,d){return s+d;},0)/diffs.length);
+}
+
+function getPeriodPhase(sortedDates,targetDate){
+  // 가장 최근 시작일 기준으로 위상 계산
+  if(!sortedDates||sortedDates.length===0)return null;
+  var avgCycle=sortedDates.length>=2?calcAvgCycle(sortedDates):28;
+  var target=new Date(targetDate);
+
+  // 가장 가까운 시작일 찾기 (과거 or 미래)
+  var candidates=[];
+  var last=new Date(sortedDates[sortedDates.length-1]);
+  // 과거 시작일들
+  for(var i=sortedDates.length-1;i>=0;i--){
+    candidates.push(new Date(sortedDates[i]));
+  }
+  // 예상 미래 시작일들 (3개월치)
+  for(var j=1;j<=3;j++){
+    var future=new Date(last);
+    future.setDate(future.getDate()+avgCycle*j);
+    candidates.push(future);
+  }
+
+  // target 이전 가장 최근 시작일 찾기
+  var refStart=null;
+  for(var k=0;k<candidates.length;k++){
+    if(candidates[k]<=target){
+      if(!refStart||candidates[k]>refStart)refStart=candidates[k];
+    }
+  }
+  if(!refStart)return null;
+
+  var dayNum=Math.round((target-refStart)/(1000*60*60*24))+1; // D+1 기준
+  if(dayNum<=5)return "period"; // 생리기
+  if(dayNum<=Math.round(avgCycle/2)-1)return "follicular"; // 난포기
+  if(dayNum<=Math.round(avgCycle/2)+1)return "ovulation"; // 배란기
+  if(dayNum<=avgCycle)return "luteal"; // 황체기
+  return null;
+}
+
+const PHASE_COLORS={
+  period:{bg:"#FFE8EE",label:"생리기",color:C.female},
+  follicular:{bg:"#FFF8E8",label:"난포기",color:"#C4924A"},
+  ovulation:{bg:"#E8F0FF",label:"배란예상",color:"#5A7A9B"},
+  luteal:{bg:"#F0E8FF",label:"황체기",color:"#8A6AA8"},
+};
+
 function RecordForm({member,date,record,onSave,onDateChange}){
   const [weight,setWeight]=useState(String((record&&record.weight)||""));
   const [waist,setWaist]=useState(String((record&&record.waist)||""));
   const [sleepStart,setSleepStart]=useState((record&&record.sleep&&record.sleep.start)||"");
   const [sleepEnd,setSleepEnd]=useState((record&&record.sleep&&record.sleep.end)||"");
   const [toilet,setToilet]=useState(String((record&&record.toilet)||""));
-  const [period,setPeriod]=useState((record&&record.period)||"");
   const [meals,setMeals]=useState(function(){return record&&record.meals?JSON.parse(JSON.stringify(record.meals)):[];});
   const [exercise,setExercise]=useState(function(){return record&&record.exercise?JSON.parse(JSON.stringify(record.exercise)):[];});
   const [addingMeal,setAddingMeal]=useState(false);
@@ -391,7 +534,6 @@ function RecordForm({member,date,record,onSave,onDateChange}){
       waist:waist?parseFloat(waist):null,
       sleep:{start:sleepStart,end:sleepEnd,total:total},
       toilet:toilet?parseInt(toilet):null,
-      period:period||null,
       meals:meals,
       exercise:exercise,
       coachComment:(record&&record.coachComment)||"",
@@ -431,8 +573,11 @@ function RecordForm({member,date,record,onSave,onDateChange}){
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>취침 시간</div><Sel value={sleepStart} onChange={setSleepStart} options={TIME_OPTS} placeholder="취침 시간 선택"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>기상 시간</div><Sel value={sleepEnd} onChange={setSleepEnd} options={TIME_OPTS} placeholder="기상 시간 선택"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>화장실 (횟수)</div><KInput value={toilet} onChange={setToilet} placeholder="예: 1" type="number"/></div>
-          {member.gender==="female"&&(
-            <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>생리 기록</div><KInput value={period} onChange={setPeriod} placeholder="예: D+2, D-7"/></div>
+          {member.hasPeriod&&(
+            <div style={{gridColumn:"1/-1"}}>
+              <div style={{fontSize:12,color:C.female,marginBottom:4,fontWeight:600}}>생리 시작일</div>
+              <PeriodStartButton memberId={member.id} date={date}/>
+            </div>
           )}
         </div>
         {sleepStart&&sleepEnd&&<SleepBar start={sleepStart} end={sleepEnd} total={total}/>}
@@ -464,7 +609,7 @@ function RecordForm({member,date,record,onSave,onDateChange}){
                         <span style={{fontSize:11,color:C.mid}}>포만 <b style={{color:C.ok}}>{m.satietyAfter}</b></span>
                       </div>
                     </div>
-                    {m.photo&&<img src={m.photo} alt="" style={{width:54,height:54,objectFit:"cover",borderRadius:8}}/>}
+}
                   </div>
                   <div style={{display:"flex",gap:8,marginTop:8}}>
                     {delMealIdx===i
@@ -528,7 +673,7 @@ function RecordForm({member,date,record,onSave,onDateChange}){
 }
 
 // ── 기록 테이블 (회원/코치 공용) ──────────────────────────────────────────────
-function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly}){
+function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
   const [editComment,setEditComment]=useState(null);
   const [commentDraft,setCommentDraft]=useState("");
   const [savingC,setSavingC]=useState(false);
@@ -554,8 +699,6 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly}){
     }},
     {label:"허리",render:function(r){return r&&r.waist?<span style={{fontSize:11}}>{r.waist}</span>:null;}},
     {label:"화장실",render:function(r){return r&&r.toilet!=null?<span style={{fontSize:11}}>{r.toilet}</span>:null;}},
-    ...(member.gender==="female"?[{label:"생리",render:function(r){return r&&r.period?<span style={{fontSize:10,color:C.female}}>{r.period}</span>:null;}}]:[]),
-
     {label:"운동",render:function(r){
       return r&&r.exercise&&r.exercise.length?r.exercise.map(function(ex,i){return<div key={i} style={{fontSize:9,color:C.ok,lineHeight:1.5}}>{ex.time&&<span style={{color:"#B0A599",marginRight:3}}>{ex.time}</span>}{ex.note}</div>;}):null;
     }},
@@ -568,7 +711,7 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly}){
             <span style={{fontSize:9,color:C.warn}}>공{m.hungerBefore}</span>
             {" "}
             <span style={{fontSize:9,color:C.ok}}>포{m.satietyAfter}</span>
-            {m.photo&&<span style={{fontSize:9,cursor:"pointer",color:C.accent,marginLeft:3}} onClick={function(){showPhotoModal&&showPhotoModal(m.photo);}}>📷</span>}
+
           </div>
         );
       }):null;
@@ -590,11 +733,12 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly}){
                 return(
                   <th key={d} style={{padding:"8px 4px",textAlign:"center",
                     borderBottom:"1px solid "+C.border,
-                    background:isToday?C.accentL:C.alt,minWidth:110,
+                    background:isToday?C.accentL:(member.hasPeriod&&periods?(function(){var ph=getPeriodPhase(periods,d);return ph?PHASE_COLORS[ph].bg:C.alt;})():C.alt),minWidth:110,
                     borderLeft:"1px solid "+C.border}}>
                     <div style={{fontSize:11,fontWeight:700,color:dow===0?C.danger:dow===6?C.male:isToday?C.accent:C.mid}}>{DAY_KR[dow]}</div>
                     <div style={{fontSize:10,color:C.mid,fontWeight:isToday?700:400}}>{d.slice(5)}</div>
                     <div style={{width:5,height:5,borderRadius:"50%",background:hasRecord?C.ok:C.border,margin:"3px auto 0"}}/>
+                    {member.hasPeriod&&periods&&(function(){var ph=getPeriodPhase(periods,d);return ph?<div style={{fontSize:8,color:PHASE_COLORS[ph].color,marginTop:2,fontWeight:700}}>{PHASE_COLORS[ph].label}</div>:null;})()}
                   </th>
                 );
               })}
@@ -750,7 +894,8 @@ function MemberHome({member,records,onSave}){
   const [selectedDate,setSelectedDate]=useState(TODAY);
   const [viewMode,setViewMode]=useState("weekly");
   const [monthYear,setMonthYear]=useState({year:now.getFullYear(),month:now.getMonth()+1});
-  const [photoModal,setPhotoModal]=useState(null);
+  const [periods,setPeriods]=useState([]);
+  useEffect(function(){if(member.hasPeriod)apiLoadPeriods(member.id).then(setPeriods);},[member.id]);
 
   var weekDates=getLast7Days();
   var monthDates=getDatesOfMonth(monthYear.year,monthYear.month);
@@ -783,15 +928,8 @@ function MemberHome({member,records,onSave}){
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <ViewControls viewMode={viewMode} setViewMode={setViewMode} monthYear={monthYear} setMonthYear={setMonthYear}/>
           <RecordTable member={member} records={records} dates={displayDates}
-            onUpdate={function(){}} showPhotoModal={setPhotoModal} isReadOnly={true}/>
+            onUpdate={function(){}} isReadOnly={true} periods={periods}/>
           <WeightChart member={member} records={records} dates={displayDates}/>
-          {photoModal&&(
-            <div onClick={function(){setPhotoModal(null);}}
-              style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,
-                display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
-              <img src={photoModal} alt="" style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:12}}/>
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -799,7 +937,7 @@ function MemberHome({member,records,onSave}){
 }
 
 // ── AI 리포트 ─────────────────────────────────────────────────────────────────
-function AIReport({member,records,apiKey,geminiModel,coachPrompt}){
+function AIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
   const [report,setReport]=useState(null);
   const [genning,setGenning]=useState(false);
 
@@ -809,7 +947,9 @@ function AIReport({member,records,apiKey,geminiModel,coachPrompt}){
     var weekDates=getLast7Days();
     var weekData=weekDates.map(function(d){
       var r=records[d];if(!r)return null;
-      return{date:d,weight:r.weight,sleep:r.sleep&&r.sleep.total,period:r.period,
+      var phase=member.hasPeriod&&periods&&periods.length?getPeriodPhase(periods,d):null;
+      return{date:d,weight:r.weight,sleep:r.sleep&&r.sleep.total,
+        periodPhase:phase?PHASE_COLORS[phase].label:null,
         meals:r.meals&&r.meals.map(function(m){return{food:m.food,hunger:m.hungerBefore,satiety:m.satietyAfter};}),
         exercise:r.exercise&&r.exercise.map(function(e){return{time:e.time,note:e.note};}),
         memberComment:r.memberComment||null,
@@ -820,10 +960,15 @@ function AIReport({member,records,apiKey,geminiModel,coachPrompt}){
       ?'{"appetite_pattern":"","satiety_trend":"","period_relation":"","sleep_relation":"","exercise_consistency":"","coach_suggestion":"","highlight":""}'
       :'{"appetite_pattern":"","satiety_trend":"","sleep_relation":"","exercise_consistency":"","coach_suggestion":"","highlight":""}';
 
+    var periodInfo=member.hasPeriod&&periods&&periods.length
+      ?"\n생리 주기 정보: 최근 시작일 "+periods.slice(-3).join(", ")
+        +(periods.length>=2?", 평균 주기 "+calcAvgCycle(periods)+"일":"")
+      :"";
     var prompt=coachPrompt+"\n\n회원: "+member.name
       +", 성별:"+(member.gender==="female"?"여성":"남성")
       +", 목표:"+member.goal
       +", 특이사항:"+member.memo
+      +periodInfo
       +"\n\n최근 7일 데이터:\n"+JSON.stringify(weekData)
       +"\n\n반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트 없이:\n"+jsonSchema;
 
@@ -875,11 +1020,10 @@ function AIReport({member,records,apiKey,geminiModel,coachPrompt}){
 }
 
 // ── 코치 회원 상세 ────────────────────────────────────────────────────────────
-function MemberDetailView({member,records,onUpdate,apiKey,geminiModel,coachPrompt}){
+function MemberDetailView({member,records,onUpdate,apiKey,geminiModel,coachPrompt,periods,setPeriods}){
   var now=new Date();
   const [viewMode,setViewMode]=useState("weekly");
   const [monthYear,setMonthYear]=useState({year:now.getFullYear(),month:now.getMonth()+1});
-  const [photoModal,setPhotoModal]=useState(null);
 
   var weekDates=getLast7Days();
   var monthDates=getDatesOfMonth(monthYear.year,monthYear.month);
@@ -888,19 +1032,38 @@ function MemberDetailView({member,records,onUpdate,apiKey,geminiModel,coachPromp
   return(
     <div style={{display:"flex",flexDirection:"column",gap:16}}>
       <ViewControls viewMode={viewMode} setViewMode={setViewMode} monthYear={monthYear} setMonthYear={setMonthYear}/>
+      {member.hasPeriod&&(
+        <Card style={{border:"1.5px solid "+C.female+"60"}}>
+          <div style={{fontWeight:700,fontSize:13,color:C.female,marginBottom:10}}>생리 시작일 기록</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+            {(periods||[]).length===0&&<span style={{fontSize:12,color:C.light}}>등록된 시작일이 없습니다</span>}
+            {(periods||[]).map(function(d){
+              return(
+                <div key={d} style={{display:"flex",alignItems:"center",gap:4,
+                  background:"#FFE8EE",borderRadius:20,padding:"4px 12px"}}>
+                  <span style={{fontSize:12,color:C.female,fontWeight:600}}>{d}</span>
+                  <button onClick={async function(){
+                    await apiDeletePeriod(member.id,d);
+                    setPeriods&&setPeriods(function(p){return p.filter(function(x){return x!==d;});});
+                  }} style={{background:"none",border:"none",cursor:"pointer",color:C.female,fontSize:14,lineHeight:1,padding:0}}>x</button>
+                </div>
+              );
+            })}
+          </div>
+          <PeriodAddInput memberId={member.id} periods={periods||[]} setPeriods={setPeriods}/>
+          {(periods||[]).length>=2&&(
+            <div style={{marginTop:8,fontSize:11,color:C.light}}>
+              평균 주기: {calcAvgCycle(periods)}일
+            </div>
+          )}
+        </Card>
+      )}
       <RecordTable member={member} records={records} dates={displayDates}
-        onUpdate={onUpdate} showPhotoModal={setPhotoModal} isReadOnly={false}/>
+        onUpdate={onUpdate} isReadOnly={false} periods={periods||[]}/>
       <WeightChart member={member} records={records} dates={displayDates}/>
       {viewMode==="weekly"&&(
         <AIReport member={member} records={records} apiKey={apiKey} geminiModel={geminiModel}
-          coachPrompt={coachPrompt}/>
-      )}
-      {photoModal&&(
-        <div onClick={function(){setPhotoModal(null);}}
-          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,
-            display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
-          <img src={photoModal} alt="" style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:12}}/>
-        </div>
+          coachPrompt={coachPrompt} periods={periods||[]}/>
       )}
     </div>
   );
@@ -987,7 +1150,7 @@ function MemberCard({member,records,onSelect,onEdit,onDelete,delId,setDelId}){
 
 // ── 회원 추가/수정 폼 ─────────────────────────────────────────────────────────
 function MemberForm({initial,onSave,onCancel,saving}){
-  const [d,setD]=useState(initial||{name:"",gender:"female",age:"",goal:"",startWeight:"",targetWeight:"",pin:"",memo:""});
+  const [d,setD]=useState(initial||{name:"",gender:"female",hasPeriod:false,age:"",goal:"",startWeight:"",targetWeight:"",pin:"",memo:""});
   var f=function(k){return function(v){setD(function(p){return Object.assign({},p,{[k]:v});});};};
   return(
     <Card style={{marginBottom:16,border:"1.5px solid "+C.accent}}>
@@ -1007,6 +1170,14 @@ function MemberForm({initial,onSave,onCancel,saving}){
       </div>
       <div style={{marginBottom:10}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>목표</div><KInput value={d.goal} onChange={f("goal")} placeholder="식욕 안정 & 체지방 감량"/></div>
       <div style={{marginBottom:10}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>특이사항</div><KInput value={d.memo} onChange={f("memo")} placeholder="무릎 주의, 갑상선약 복용"/></div>
+      {d.gender==="female"&&(
+        <div style={{marginBottom:10,display:"flex",alignItems:"center",gap:10}}>
+          <input type="checkbox" id="hasPeriod" checked={!!d.hasPeriod}
+            onChange={function(e){setD(function(p){return Object.assign({},p,{hasPeriod:e.target.checked});});}}
+            style={{width:16,height:16,accentColor:C.female}}/>
+          <label htmlFor="hasPeriod" style={{fontSize:13,color:C.female,cursor:"pointer"}}>생리 주기 기록 사용</label>
+        </div>
+      )}
       <div style={{display:"flex",gap:8}}>
         <Btn size="sm" onClick={function(){onSave(d);}} disabled={saving}>{saving?"저장 중...":initial?"수정 저장":"추가"}</Btn>
         <Btn size="sm" variant="ghost" onClick={onCancel}>취소</Btn>
@@ -1031,10 +1202,19 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
   var member=members.find(function(m){return m.id===selected;});
   var memberRecords=selected?(allRecords[selected]||{}):{};
 
+  const [periods,setPeriods]=useState([]);
+
   var selectMember=async function(id){
     setSelected(id);setLoading(true);
+    var member=members.find(function(m){return m.id===id;});
     var recs=await apiLoadRecords(id);
     setAllRecords(function(p){return Object.assign({},p,{[id]:recs});});
+    if(member&&member.hasPeriod){
+      var p=await apiLoadPeriods(id);
+      setPeriods(p);
+    }else{
+      setPeriods([]);
+    }
     setLoading(false);
   };
 
@@ -1163,7 +1343,7 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
           {loading?<Spinner/>:(
             <MemberDetailView member={member} records={memberRecords} onUpdate={updateRecord}
               apiKey={apiKey} geminiModel={geminiModel}
-              coachPrompt={coachPrompt}/>
+              coachPrompt={coachPrompt} periods={periods} setPeriods={setPeriods}/>
           )}
         </div>
       )}
