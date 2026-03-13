@@ -1,4 +1,4 @@
-<!-- DietDesign v33 -->
+<!-- DietDesign v34 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -15,6 +15,9 @@ input,select,textarea,button{font-family:inherit;}
 @media(min-width:768px){.coach-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}}
 @media(max-width:767px){.coach-grid{display:flex;flex-direction:column;gap:10px;}.form2col{grid-template-columns:1fr!important;}}
 .scrollx{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+input[type="date"]::-webkit-date-and-time-value{min-height:1.2em;}
+input[type="date"]::-webkit-datetime-edit-text{opacity:1;}
+input[type="date"]:empty::-webkit-datetime-edit{color:transparent;}
 </style>
 </head>
 <body>
@@ -444,11 +447,17 @@ function PeriodAddInput({memberId,periods,setPeriods}){
   );
 }
 
+// "2026-02-04" → new Date(2026,1,4) : 로컬 타임존 기준으로 생성해 timezone 오프셋 방지
+function parseLocalDate(s){
+  var p=String(s).split("-").map(Number);
+  return new Date(p[0],p[1]-1,p[2]);
+}
+
 function calcAvgCycle(sortedDates){
   if(sortedDates.length<2)return null;
   var diffs=[];
   for(var i=1;i<sortedDates.length;i++){
-    var a=new Date(sortedDates[i-1]),b=new Date(sortedDates[i]);
+    var a=parseLocalDate(sortedDates[i-1]),b=parseLocalDate(sortedDates[i]);
     diffs.push(Math.round((b-a)/(1000*60*60*24)));
   }
   return Math.round(diffs.reduce(function(s,d){return s+d;},0)/diffs.length);
@@ -457,10 +466,10 @@ function calcAvgCycle(sortedDates){
 function getPeriodPhase(sortedDates,targetDate){
   if(!sortedDates||sortedDates.length===0)return null;
   var avgCycle=sortedDates.length>=2?calcAvgCycle(sortedDates):28;
-  var target=new Date(targetDate);
+  var target=parseLocalDate(targetDate);
   var candidates=[];
-  var last=new Date(sortedDates[sortedDates.length-1]);
-  for(var i=sortedDates.length-1;i>=0;i--) candidates.push(new Date(sortedDates[i]));
+  var last=parseLocalDate(sortedDates[sortedDates.length-1]);
+  for(var i=sortedDates.length-1;i>=0;i--) candidates.push(parseLocalDate(sortedDates[i]));
   for(var j=1;j<=3;j++){var future=new Date(last);future.setDate(future.getDate()+avgCycle*j);candidates.push(future);}
   var refStart=null;
   for(var k=0;k<candidates.length;k++){if(candidates[k]<=target){if(!refStart||candidates[k]>refStart)refStart=candidates[k];}}
