@@ -1,4 +1,4 @@
-<!-- DietDesign v25 -->
+<!-- DietDesign v27 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -622,11 +622,12 @@ function RecordTable({member,records,dates,onUpdate,showPhotoModal,isReadOnly}){
             })}
             <tr>
               <td style={{padding:"8px 14px",fontSize:11,color:C.mid,fontWeight:600,
-                background:C.alt,verticalAlign:"top",position:"sticky",left:0,zIndex:1}}>내 한마디</td>
+                background:C.alt,verticalAlign:"top",position:"sticky",left:0,zIndex:1,
+                borderBottom:"1px solid "+C.border}}>내 한마디</td>
               {dates.map(function(d){
                 return(
                   <td key={d} style={{padding:"5px 4px",verticalAlign:"top",
-                    borderLeft:"1px solid "+C.border,
+                    borderLeft:"1px solid "+C.border,borderBottom:"1px solid "+C.border,
                     background:d===TODAY?"#FFFDF9":"transparent"}}>
                     {records[d]&&records[d].memberComment
                       ?<div style={{fontSize:9,color:C.text,lineHeight:1.5,fontStyle:"italic"}}>{records[d].memberComment}</div>
