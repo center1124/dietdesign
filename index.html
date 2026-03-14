@@ -1,4 +1,4 @@
-<!-- DietDesign v37 -->
+<!-- DietDesign v38 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -85,6 +85,32 @@ function getDayOfWeek(dateStr){
 const TIME_OPTS=Array.from({length:48},(_,i)=>
   String(Math.floor(i/2)).padStart(2,"0")+":"+(i%2===0?"00":"30")
 );
+
+// 슬라이더로 시간 선택 — startHour 기준으로 count개 슬롯 표시
+function TimeSlider({value,onChange,startHour,count,placeholder}){
+  // TIME_OPTS 인덱스로 변환
+  var startIdx=startHour*2;
+  var slotCount=count||48;
+  // value -> 슬라이더 위치
+  var valIdx=TIME_OPTS.indexOf(value);
+  // 슬라이더 0~(slotCount-1) 범위, 실제 슬롯은 (startIdx+pos)%48
+  var posFromVal=valIdx>=0?((valIdx-startIdx+48)%48):null;
+  var sliderVal=(posFromVal!==null&&posFromVal<slotCount)?posFromVal:0;
+  var displayVal=value||placeholder||"--:--";
+  var color=value?C.accent:C.light;
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:8}}>
+      <input type="range" min={0} max={slotCount-1} step={1} value={sliderVal}
+        onChange={function(e){
+          var pos=Number(e.target.value);
+          var idx=(startIdx+pos)%48;
+          onChange(TIME_OPTS[idx]);
+        }}
+        style={{flex:1,accentColor:C.accent,cursor:"pointer"}}/>
+      <span style={{fontSize:14,fontWeight:700,color:color,minWidth:44,textAlign:"right"}}>{displayVal}</span>
+    </div>
+  );
+}
 const DAY_KR=["일","월","화","수","목","금","토"];
 
 const DEFAULT_PROMPT=[
@@ -360,7 +386,7 @@ function MealForm({initial,onSave,onCancel,label}){
   return(
     <div style={{background:C.alt,borderRadius:10,padding:14,border:"1px solid "+C.border,marginBottom:10}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:10,marginBottom:10}}>
-        <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>시간</div><Sel value={time} onChange={setTime} options={TIME_OPTS} placeholder="시간 선택"/></div>
+        <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>시간</div><TimeSlider value={time} onChange={setTime} startHour={6} count={36} placeholder="--:--"/></div>
         <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>먹은 음식</div><KInput value={food} onChange={setFood} placeholder="비빔밥, 된장국"/></div>
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
@@ -382,7 +408,7 @@ function ExForm({initial,onSave,onCancel,label}){
   return(
     <div style={{background:C.alt,borderRadius:10,padding:14,border:"1px solid "+C.border,marginBottom:10}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:10,marginBottom:10}}>
-        <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>시간</div><Sel value={time} onChange={setTime} options={TIME_OPTS} placeholder="시간 선택"/></div>
+        <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>시간</div><TimeSlider value={time} onChange={setTime} startHour={6} count={36} placeholder="--:--"/></div>
         <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>운동 내용</div><KInput value={note} onChange={setNote} placeholder="굿모닝 5x8, 달리기 3km"/></div>
       </div>
       <div style={{display:"flex",gap:8}}>
@@ -551,8 +577,8 @@ function RecordForm({member,date,record,onSave,onDateChange}){
         <div className="form2col" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>체중 (kg)</div><KInput value={weight} onChange={setWeight} placeholder="예: 65.5" type="number"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>허리 둘레 (cm)</div><KInput value={waist} onChange={setWaist} placeholder="예: 80" type="number"/></div>
-          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>취침 시간</div><Sel value={sleepStart} onChange={setSleepStart} options={TIME_OPTS} placeholder="취침 시간 선택"/></div>
-          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>기상 시간</div><Sel value={sleepEnd} onChange={setSleepEnd} options={TIME_OPTS} placeholder="기상 시간 선택"/></div>
+          <div style={{gridColumn:"1/-1"}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>취침 시간</div><TimeSlider value={sleepStart} onChange={setSleepStart} startHour={21} count={24} placeholder="--:--"/></div>
+          <div style={{gridColumn:"1/-1"}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>기상 시간</div><TimeSlider value={sleepEnd} onChange={setSleepEnd} startHour={4} count={16} placeholder="--:--"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>화장실 (횟수)</div><KInput value={toilet} onChange={setToilet} placeholder="예: 1" type="number"/></div>
           {member.hasPeriod&&(
             <div style={{gridColumn:"1/-1"}}>
