@@ -1,4 +1,4 @@
-<!-- DietDesign v38 -->
+<!-- DietDesign v41 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -575,8 +575,8 @@ function RecordForm({member,date,record,onSave,onDateChange}){
       <Card>
         <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>신체 지표</div>
         <div className="form2col" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>체중 (kg)</div><KInput value={weight} onChange={setWeight} placeholder="예: 65.5" type="number"/></div>
-          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>허리 둘레 (cm)</div><KInput value={waist} onChange={setWaist} placeholder="예: 80" type="number"/></div>
+          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>체중 (아침, kg)</div><KInput value={weight} onChange={setWeight} placeholder="예: 65.5" type="number"/></div>
+          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>허리 둘레 (아침, cm)</div><KInput value={waist} onChange={setWaist} placeholder="예: 80" type="number"/></div>
           <div style={{gridColumn:"1/-1"}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>취침 시간</div><TimeSlider value={sleepStart} onChange={setSleepStart} startHour={21} count={24} placeholder="--:--"/></div>
           <div style={{gridColumn:"1/-1"}}><div style={{fontSize:12,color:C.mid,marginBottom:4}}>기상 시간</div><TimeSlider value={sleepEnd} onChange={setSleepEnd} startHour={4} count={16} placeholder="--:--"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>화장실 (횟수)</div><KInput value={toilet} onChange={setToilet} placeholder="예: 1" type="number"/></div>
@@ -596,7 +596,7 @@ function RecordForm({member,date,record,onSave,onDateChange}){
           <Btn size="sm" onClick={function(){setAddingMeal(true);setEditMealIdx(null);}}>+ 추가</Btn>
         </div>
         {addingMeal&&(
-          <MealForm onSave={function(m){setMeals(function(p){return p.concat([m]);});setAddingMeal(false);}} onCancel={function(){setAddingMeal(false);}}/>
+          <MealForm onSave={function(m){setMeals(function(p){return p.concat([m]);});}} onCancel={function(){setAddingMeal(false);}}/>
         )}
         {meals.map(function(m,i){
           return(
@@ -784,7 +784,7 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
             <tr>
               <td style={{padding:"8px 14px",fontSize:11,color:C.accent,fontWeight:600,
                 background:C.alt,verticalAlign:"top",position:"sticky",left:0,zIndex:1,
-                borderBottom:"1px solid "+C.border}}>코멘트</td>
+                borderBottom:"1px solid "+C.border}}>코멘트 (아침)</td>
               {dates.map(function(d){
                 return(
                   <td key={d} style={{padding:"5px 4px",verticalAlign:"top",
