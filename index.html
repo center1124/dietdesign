@@ -1,4 +1,4 @@
-<!-- DietDesign v34 -->
+<!-- DietDesign v37 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -656,6 +656,8 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
   const [commentDraft,setCommentDraft]=useState("");
   const [savingC,setSavingC]=useState(false);
   const ro=isReadOnly||false;
+  const scrollRef=useRef(null);
+  useEffect(function(){if(scrollRef.current)scrollRef.current.scrollLeft=scrollRef.current.scrollWidth;},[dates]);
 
   const saveComment=async function(date){
     setSavingC(true);
@@ -686,8 +688,7 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
           <div key={i} style={{marginBottom:4,textAlign:"left"}}>
             <div style={{fontSize:9,color:C.light}}>{m.time}</div>
             <div style={{fontSize:9,color:C.text,wordBreak:"break-all"}}>{m.food}</div>
-            <span style={{fontSize:9,color:C.warn}}>공{m.hungerBefore}</span>{" "}
-            <span style={{fontSize:9,color:C.ok}}>포{m.satietyAfter}</span>
+            <span style={{fontSize:9,color:C.warn}}>공{m.hungerBefore}</span>
           </div>
         );
       }):null;
@@ -696,7 +697,7 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
 
   return(
     <Card style={{padding:0,overflow:"hidden"}}>
-      <div className="scrollx">
+      <div className="scrollx" ref={scrollRef}>
         <table style={{width:"100%",borderCollapse:"collapse",minWidth:60+dates.length*110}}>
           <thead>
             <tr style={{background:C.alt}}>
