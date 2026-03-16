@@ -961,144 +961,21 @@ function AIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
       ?"\n생리 주기 정보: 최근 시작일 "+periods.slice(-3).join(", ")
         +(periods.length>=2?", 평균 주기 "+calcAvgCycle(periods)+"일":"")
       :"";
-    var prompt=coachPrompt+"\n\n회원: "+member.name
-      +", 성별:"+(member.gender==="female"?"여성":"남성")
-      +", 목표:"+member.goal
-      +", 특이사항:"+member.memo
-      +periodInfo
-      +"\n\n최근 7일 데이터:\n"+JSON.stringify(weekData)
-      +"\n\n반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트 없이:\n"+jsonSchema;
-
-    var r=await callGemini(apiKey,prompt,geminiModel||DEFAULT_MODEL);
-    setReport(r);setGenning(false);
-  };
-
-  return(
-    <Card style={{border:"1.5px solid #C0DAC8"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <div style={{fontWeight:700,fontSize:13,color:C.ok}}>주간 AI 리포트 (코치 전용)</div>
-        <Btn size="sm" variant="outline" onClick={genReport} disabled={genning||!apiKey}
-          style={{borderColor:C.ok,color:C.ok}}>
-          {genning?"생성 중...":"리포트 생성"}
-        </Btn>
-      </div>
-      {!apiKey&&<p style={{fontSize:12,color:C.light}}>설정에서 API 키를 먼저 입력해주세요.</p>}
-      {report&&report.raw&&(
-        <div style={{background:"#FDF0EE",borderRadius:8,padding:"10px 14px",marginBottom:10}}>
-          <div style={{fontSize:11,fontWeight:700,color:C.danger,marginBottom:4}}>오류 또는 원문</div>
-          <p style={{fontSize:12,color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{report.raw}</p>
-        </div>
-      )}
-      {report&&!report.raw&&(
-        <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {report.highlight&&(
-            <div style={{background:"#EFF7F1",borderRadius:8,padding:"10px 14px"}}>
-              <div style={{fontSize:11,fontWeight:700,color:C.ok,marginBottom:4}}>이번 주 잘한 점</div>
-              <p style={{fontSize:13,color:C.text}}>{report.highlight}</p>
-            </div>
-          )}
-          {[["식욕 안정 패턴","appetite_pattern"],["포만감 추이","satiety_trend"],
-            ...((member.gender==="female"&&member.hasPeriod)?[["생리 주기 연관성","period_relation"]]:[]),
-            ["수면 연관성","sleep_relation"],["운동 일관성","exercise_consistency"],
-            ["다음 주 코칭 참고","coach_suggestion"]
-          ].map(function(pair){
-            var l=pair[0],k=pair[1];
-            return report[k]?(
-              <div key={k}>
-                <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:3}}>{l}</div>
-                <p style={{fontSize:13,color:C.text,lineHeight:1.6}}>{report[k]}</p>
-              </div>
-            ):null;
-          })}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-
-// ── 데일리 AI 리포트 (코치 전용) ─────────────────────────────────────────────
-function DailyAIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
-  const [report,setReport]=useState(null);
-  const [genning,setGenning]=useState(false);
-
-  var yesterday=function(){
-    var d=new Date();d.setDate(d.getDate()-1);
-    return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
-  }();
-
-  var genReport=async function(){
-    if(!apiKey){alert("API 키를 먼저 입력해주세요.");return;}
-    setGenning(true);setReport(null);
-
-    // 최근 7일 요약
-    var last7=getLast7Days();
-    var recentSummary=last7.map(function(d){
-      var r=records[d];if(!r)return null;
-      var avgSat=r.meals&&r.meals.length
-        ?(r.meals.reduce(function(s,m){return s+(m.satietyAfter||0);},0)/r.meals.length).toFixed(1)
-        :null;
-      return{date:d,weight:r.weight||null,sleep:r.sleep&&r.sleep.total||null,avgSatiety:avgSat};
-    }).filter(Boolean);
-
-    // 어제 상세
-    var yd=records[yesterday];
-    var yesterdayDetail=yd?{
-      date:yesterday,
-      weight:yd.weight,
-      sleep:yd.sleep&&yd.sleep.total,
-      meals:yd.meals&&yd.meals.map(function(m){return{time:m.time,food:m.food,hunger:m.hungerBefore,satiety:m.satietyAfter};}),
-      exercise:yd.exercise&&yd.exercise.map(function(e){return{time:e.time,note:e.note};}),
-      memberComment:yd.memberComment||null,
-    }:null;
-
-    // 오늘 생리 위상
-    var todayPhase=member.hasPeriod&&periods&&periods.length
-      ?getPeriodPhase(periods,TODAY):null;
-    var phaseInfo=todayPhase?"오늘 생리 위상: "+PHASE_COLORS[todayPhase].label:"";
-
-    var periodInfo=member.hasPeriod&&periods&&periods.length
-      ?"생리 주기 정보: 최근 시작일 "+periods.slice(-3).join(", ")
-        +(periods.length>=2?", 평균 주기 "+calcAvgCycle(periods)+"일":"")
-      :"";
-
-    var jsonSchema='{"yesterday_summary":"","today_outlook":"","today_coaching":"","phase_note":""}';
-
     var prompt=coachPrompt
-      +"
-
-회원: "+member.name
+      +"\n\n회원: "+member.name
       +", 성별:"+(member.gender==="female"?"여성":"남성")
       +", 목표:"+member.goal
       +", 특이사항:"+member.memo
-      +(periodInfo?"
-"+periodInfo:"")
-      +(phaseInfo?"
-"+phaseInfo:"")
-      +"
-
-최근 7일 요약:
-"+JSON.stringify(recentSummary)
-      +"
-
-어제("+yesterday+") 상세:
-"+JSON.stringify(yesterdayDetail||"기록 없음")
-      +"
-
-오늘("+TODAY+") 코칭 방향을 아래 JSON으로만 답하세요:"
-      +"
-- yesterday_summary: 어제 흐름 한 줄 요약"
-      +"
-- today_outlook: 오늘 식욕/컨디션 예측 한 줄"
-      +"
-- today_coaching: 오늘 식사 방향 제안 1~2가지 (구체적으로)"
-      +(member.hasPeriod&&todayPhase?"
-- phase_note: 오늘 생리 위상 관련 코칭 한 줄":"")
-      +"
-
-반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트 없이:
-"+jsonSchema;
-
+      +(periodInfo?"\n"+periodInfo:"")
+      +(phaseInfo?"\n"+phaseInfo:"")
+      +"\n\n최근 7일 요약:\n"+JSON.stringify(recentSummary)
+      +"\n\n어제("+yesterday+") 상세:\n"+JSON.stringify(yesterdayDetail||"기록 없음")
+      +"\n\n오늘("+TODAY+") 코칭 방향을 아래 JSON으로만 답하세요:"
+      +"\n- yesterday_summary: 어제 흐름 한 줄 요약"
+      +"\n- today_outlook: 오늘 식욕/컨디션 예측 한 줄"
+      +"\n- today_coaching: 오늘 식사 방향 제안 1~2가지 (구체적으로)"
+      +(member.hasPeriod&&todayPhase?"\n- phase_note: 오늘 생리 위상 관련 코칭 한 줄":"")
+      +"\n\n반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트 없이:\n"+jsonSchema;
     var r=await callGemini(apiKey,prompt,geminiModel||DEFAULT_MODEL);
     setReport(r);setGenning(false);
   };
