@@ -1,4 +1,4 @@
-<!-- DietDesign v39 -->
+<!-- DietDesign v40 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -221,6 +221,37 @@ async function callGemini(apiKey,prompt,model){
     return {raw:"네트워크 오류: "+e.message};
   }
 }
+
+async function callGeminiChat(apiKey,model,contents){
+  // contents: [{role:"user"|"model", parts:[{text:"..."}]}, ...]
+  // 최근 10턴(20개 메시지)만 유지, 단 첫 번째(시스템 컨텍스트)는 항상 포함
+  var trimmed=contents;
+  if(contents.length>21){
+    trimmed=[contents[0]].concat(contents.slice(-(20)));
+  }
+  try{
+    const body={
+      contents:trimmed,
+      generationConfig:{temperature:0.7,maxOutputTokens:1024}
+    };
+    const url="https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent?key="+apiKey;
+    const res=await fetch(url,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body)
+    });
+    if(!res.ok){
+      const errText=await res.text();
+      return "API 오류 "+res.status+": "+errText.slice(0,200);
+    }
+    const data=await res.json();
+    return (data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts&&data.candidates[0].content.parts[0]&&data.candidates[0].content.parts[0].text)||"응답을 받지 못했어요.";
+  }catch(e){
+    return "네트워크 오류: "+e.message;
+  }
+}
+
+
 
 // ── 공통 UI ───────────────────────────────────────────────────────────────────
 const inputStyle={
@@ -1172,6 +1203,144 @@ function DailyAIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
   );
 }
 
+// ── 코치 AI 채팅 ──────────────────────────────────────────────────────────────
+function CoachChat({member,records,apiKey,geminiModel,coachPrompt,periods}){
+  const [messages,setMessages]=useState([]); // {role:"user"|"model", text:""}
+  const [input,setInput]=useState("");
+  const [sending,setSending]=useState(false);
+  const bottomRef=useRef(null);
+
+  useEffect(function(){
+    if(bottomRef.current) bottomRef.current.scrollIntoView({behavior:"smooth"});
+  },[messages]);
+
+  var buildContext=function(){
+    var last7=getLast7Days();
+    var recentData=last7.map(function(d){
+      var r=records[d];if(!r)return null;
+      var phase=member.hasPeriod&&periods&&periods.length?getPeriodPhase(periods,d):null;
+      var avgSat=r.meals&&r.meals.length
+        ?(r.meals.reduce(function(s,m){return s+(m.satietyAfter||0);},0)/r.meals.length).toFixed(1):null;
+      return{date:d,weight:r.weight||null,sleep:r.sleep&&r.sleep.total||null,
+        avgSatiety:avgSat,
+        meals:r.meals&&r.meals.map(function(m){return m.food;}),
+        exercise:r.exercise&&r.exercise.map(function(e){return e.note;}),
+        memberComment:r.memberComment||null,
+        coachComment:r.coachComment||null,
+        phase:phase?PHASE_COLORS[phase].label:null};
+    }).filter(Boolean);
+
+    var periodInfo=member.hasPeriod&&periods&&periods.length
+      ?"생리 주기 정보: 최근 시작일 "+periods.slice(-3).join(", ")
+        +(periods.length>=2?", 평균 주기 "+calcAvgCycle(periods)+"일":"")
+      :"";
+
+    return coachPrompt
+      +"\n\n[회원 정보]\n이름: "+member.name
+      +"\n성별: "+(member.gender==="female"?"여성":"남성")
+      +"\n나이: "+member.age+"세"
+      +"\n목표: "+member.goal
+      +"\n특이사항: "+member.memo
+      +(periodInfo?"\n"+periodInfo:"")
+      +"\n\n[최근 7일 기록]\n"+JSON.stringify(recentData)
+      +"\n\n코치가 이 회원에 대해 질문하면 위 데이터를 바탕으로 코칭 관점에서 자연스럽게 대화해주세요. JSON 형식 없이 자유롭게 답변하세요.";
+  };
+
+  var send=async function(){
+    if(!input.trim()||sending)return;
+    if(!apiKey){alert("API 키를 먼저 입력해주세요.");return;}
+
+    var userText=input.trim();
+    setInput("");
+    setSending(true);
+
+    var newMessages=messages.concat([{role:"user",text:userText}]);
+    setMessages(newMessages);
+
+    // contents 배열 구성: 첫 번째는 항상 컨텍스트 포함한 user 메시지
+    var ctx=buildContext();
+    var contents;
+    if(newMessages.length===1){
+      contents=[{role:"user",parts:[{text:ctx+"\n\n코치 질문: "+userText}]}];
+    }else{
+      var history=[{role:"user",parts:[{text:ctx+"\n\n코치 질문: "+newMessages[0].text}]}];
+      for(var i=1;i<newMessages.length;i++){
+        history.push({
+          role:newMessages[i].role==="user"?"user":"model",
+          parts:[{text:newMessages[i].text}]
+        });
+      }
+      contents=history;
+    }
+
+    try{
+      var reply=await callGeminiChat(apiKey,geminiModel||DEFAULT_MODEL,contents);
+      setMessages(function(p){return p.concat([{role:"model",text:reply}]);});
+    }catch(e){
+      setMessages(function(p){return p.concat([{role:"model",text:"오류: "+e.message}]);});
+    }finally{
+      setSending(false);
+    }
+  };
+
+  var handleKey=function(e){
+    if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}
+  };
+
+  return(
+    <Card style={{border:"1.5px solid "+C.male+"60",padding:0,overflow:"hidden"}}>
+      <div style={{padding:"12px 16px",borderBottom:"1px solid "+C.border,
+        display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{fontWeight:700,fontSize:13,color:C.male}}>💬 AI와 회원 토론</div>
+        {messages.length>0&&(
+          <Btn size="sm" variant="ghost" onClick={function(){setMessages([]);}}
+            style={{fontSize:11,color:C.light}}>대화 초기화</Btn>
+        )}
+      </div>
+      <div style={{height:320,overflowY:"auto",padding:"12px 16px",display:"flex",flexDirection:"column",gap:10}}>
+        {messages.length===0&&(
+          <div style={{textAlign:"center",color:C.light,fontSize:13,marginTop:60}}>
+            회원에 대해 AI에게 자유롭게 질문해보세요
+          </div>
+        )}
+        {messages.map(function(msg,i){
+          var isUser=msg.role==="user";
+          return(
+            <div key={i} style={{display:"flex",justifyContent:isUser?"flex-end":"flex-start"}}>
+              <div style={{
+                maxWidth:"80%",padding:"9px 13px",borderRadius:isUser?"14px 14px 4px 14px":"14px 14px 14px 4px",
+                background:isUser?C.accent:C.alt,
+                color:isUser?"#fff":C.text,
+                fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"
+              }}>
+                {msg.text}
+              </div>
+            </div>
+          );
+        })}
+        {sending&&(
+          <div style={{display:"flex",justifyContent:"flex-start"}}>
+            <div style={{padding:"9px 13px",borderRadius:"14px 14px 14px 4px",
+              background:C.alt,color:C.light,fontSize:13}}>
+              생각 중...
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef}/>
+      </div>
+      <div style={{padding:"10px 16px",borderTop:"1px solid "+C.border,display:"flex",gap:8}}>
+        <textarea value={input} onChange={function(e){setInput(e.target.value);}}
+          onKeyDown={handleKey}
+          placeholder="질문을 입력하세요 (Enter로 전송, Shift+Enter 줄바꿈)"
+          disabled={sending}
+          style={Object.assign({},inputStyle,{minHeight:44,maxHeight:120,resize:"none",flex:1,fontSize:13})}/>
+        <Btn onClick={send} disabled={sending||!input.trim()||!apiKey}
+          style={{alignSelf:"flex-end",whiteSpace:"nowrap"}}>전송</Btn>
+      </div>
+    </Card>
+  );
+}
+
 // ── 코치 회원 상세 ────────────────────────────────────────────────────────────
 function MemberDetailView({member,records,onUpdate,apiKey,geminiModel,coachPrompt,periods,setPeriods}){
   var now=new Date();
@@ -1220,6 +1389,8 @@ function MemberDetailView({member,records,onUpdate,apiKey,geminiModel,coachPromp
         <AIReport member={member} records={records} apiKey={apiKey} geminiModel={geminiModel}
           coachPrompt={coachPrompt} periods={periods||[]}/>
       )}
+      <CoachChat member={member} records={records} apiKey={apiKey}
+        geminiModel={geminiModel} coachPrompt={coachPrompt} periods={periods||[]}/>
     </div>
   );
 }
