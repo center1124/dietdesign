@@ -1,4 +1,4 @@
-<!-- DietDesign v36 -->
+<!-- DietDesign v39 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -393,14 +393,19 @@ function PeriodStartButton({memberId,date}){
 
   var toggle=async function(){
     setSaving(true);
-    if(isStart){
-      await apiDeletePeriod(memberId,date);
-      setPeriods(function(p){return p.filter(function(d){return d!==date;});});
-    }else{
-      await apiSavePeriod(memberId,date);
-      setPeriods(function(p){return p.concat([date]).sort();});
+    try{
+      if(isStart){
+        await apiDeletePeriod(memberId,date);
+        setPeriods(function(p){return p.filter(function(d){return d!==date;});});
+      }else{
+        await apiSavePeriod(memberId,date);
+        setPeriods(function(p){return p.concat([date]).sort();});
+      }
+    }catch(e){
+      alert("저장 실패: "+e.message);
+    }finally{
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   if(periods===null)return <span style={{fontSize:12,color:C.light}}>불러오는 중...</span>;
@@ -432,10 +437,15 @@ function PeriodAddInput({memberId,periods,setPeriods}){
     if(!date)return;
     if(periods.includes(date)){alert("이미 등록된 날짜입니다.");return;}
     setSaving(true);
-    await apiSavePeriod(memberId,date);
-    setPeriods&&setPeriods(function(p){return p.concat([date]).sort();});
-    setDate("");
-    setSaving(false);
+    try{
+      await apiSavePeriod(memberId,date);
+      setPeriods&&setPeriods(function(p){return p.concat([date]).sort();});
+      setDate("");
+    }catch(e){
+      alert("저장 실패: "+e.message);
+    }finally{
+      setSaving(false);
+    }
   };
 
   return(
@@ -527,18 +537,24 @@ function RecordForm({member,date,record,onSave,onDateChange}){
 
   const handleSave=async function(){
     setSaving(true);
-    await onSave(date,{
-      weight:weight?parseFloat(weight):null,
-      waist:waist?parseFloat(waist):null,
-      sleep:{start:sleepStart,end:sleepEnd,total:total},
-      toilet:toilet?parseInt(toilet):null,
-      meals:meals,
-      exercise:exercise,
-      coachComment:(record&&record.coachComment)||"",
-      memberComment:memberComment||null,
-    });
-    setSaving(false);setSaved(true);
-    setTimeout(function(){setSaved(false);},2500);
+    try{
+      await onSave(date,{
+        weight:weight?parseFloat(weight):null,
+        waist:waist?parseFloat(waist):null,
+        sleep:{start:sleepStart,end:sleepEnd,total:total},
+        toilet:toilet?parseInt(toilet):null,
+        meals:meals,
+        exercise:exercise,
+        coachComment:(record&&record.coachComment)||"",
+        memberComment:memberComment||null,
+      });
+      setSaved(true);
+      setTimeout(function(){setSaved(false);},2500);
+    }catch(e){
+      alert("저장 실패: "+e.message);
+    }finally{
+      setSaving(false);
+    }
   };
 
   return(
@@ -678,9 +694,15 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
 
   const saveComment=async function(date){
     setSavingC(true);
-    const rec=records[date]||{};
-    await onUpdate(date,Object.assign({},rec,{coachComment:commentDraft}));
-    setEditComment(null);setSavingC(false);
+    try{
+      const rec=records[date]||{};
+      await onUpdate(date,Object.assign({},rec,{coachComment:commentDraft}));
+      setEditComment(null);
+    }catch(e){
+      alert("저장 실패: "+e.message);
+    }finally{
+      setSavingC(false);
+    }
   };
 
   const rows=[
@@ -715,9 +737,16 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
     }},
   ];
 
+  const scrollRef=useRef(null);
+  useEffect(function(){
+    if(scrollRef.current){
+      scrollRef.current.scrollLeft=scrollRef.current.scrollWidth;
+    }
+  },[dates]);
+
   return(
     <Card style={{padding:0,overflow:"hidden"}}>
-      <div className="scrollx">
+      <div className="scrollx" ref={scrollRef}>
         <table style={{width:"100%",borderCollapse:"collapse",minWidth:60+dates.length*110}}>
           <thead>
             <tr style={{background:C.alt}}>
@@ -820,7 +849,9 @@ function WeightChart({member,records,dates}){
   var weightDates=dates.filter(function(d){return records[d]&&records[d].weight;});
   if(weightDates.length<2)return null;
   var wts=weightDates.map(function(d){return records[d].weight;});
-  var minW=Math.min.apply(null,wts)-1,maxW=Math.max.apply(null,wts)+1;
+  var rawMin=Math.min.apply(null,wts),rawMax=Math.max.apply(null,wts);
+  var minW=rawMin-1,maxW=rawMax+1;
+  if(maxW===minW)maxW=minW+2; // 모든 체중이 같을 때 division by zero 방지
   var W=560,H=120,pL=36,pR=10,pT=10,pB=22;
   var xp=function(i){return pL+i*(W-pL-pR)/(weightDates.length-1);};
   var yp=function(v){return pT+(H-pT-pB)*(1-(v-minW)/(maxW-minW));};
@@ -933,7 +964,7 @@ function MemberHome({member,records,onSave}){
   );
 }
 
-// ── AI 리포트 ─────────────────────────────────────────────────────────────────
+// ── AI 리포트 (주간) ─────────────────────────────────────────────────────────
 function AIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
   const [report,setReport]=useState(null);
   const [genning,setGenning]=useState(false);
@@ -966,64 +997,57 @@ function AIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
       +", 성별:"+(member.gender==="female"?"여성":"남성")
       +", 목표:"+member.goal
       +", 특이사항:"+member.memo
-      +(periodInfo?"\n"+periodInfo:"")
-      +(phaseInfo?"\n"+phaseInfo:"")
-      +"\n\n최근 7일 요약:\n"+JSON.stringify(recentSummary)
-      +"\n\n어제("+yesterday+") 상세:\n"+JSON.stringify(yesterdayDetail||"기록 없음")
-      +"\n\n오늘("+TODAY+") 코칭 방향을 아래 JSON으로만 답하세요:"
-      +"\n- yesterday_summary: 어제 흐름 한 줄 요약"
-      +"\n- today_outlook: 오늘 식욕/컨디션 예측 한 줄"
-      +"\n- today_coaching: 오늘 식사 방향 제안 1~2가지 (구체적으로)"
-      +(member.hasPeriod&&todayPhase?"\n- phase_note: 오늘 생리 위상 관련 코칭 한 줄":"")
+      +periodInfo
+      +"\n\n최근 7일 데이터:\n"+JSON.stringify(weekData)
       +"\n\n반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트 없이:\n"+jsonSchema;
-    var r=await callGemini(apiKey,prompt,geminiModel||DEFAULT_MODEL);
-    setReport(r);setGenning(false);
+
+    try{
+      var r=await callGemini(apiKey,prompt,geminiModel||DEFAULT_MODEL);
+      setReport(r);
+    }catch(e){
+      setReport({raw:"오류: "+e.message});
+    }finally{
+      setGenning(false);
+    }
   };
 
   return(
-    <Card style={{border:"1.5px solid "+C.accent+"80",marginBottom:4}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:report?12:0}}>
-        <div style={{fontWeight:700,fontSize:13,color:C.accent}}>
-          오늘의 코칭 브리핑 <span style={{fontSize:11,fontWeight:400,color:C.light}}>({TODAY})</span>
-        </div>
+    <Card style={{border:"1.5px solid #C0DAC8"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div style={{fontWeight:700,fontSize:13,color:C.ok}}>📊 주간 AI 리포트</div>
         <Btn size="sm" variant="outline" onClick={genReport} disabled={genning||!apiKey}
-          style={{borderColor:C.accent,color:C.accent}}>
-          {genning?"생성 중...":report?"다시 생성":"브리핑 생성"}
+          style={{borderColor:C.ok,color:C.ok}}>
+          {genning?"생성 중...":"리포트 생성"}
         </Btn>
       </div>
-      {!apiKey&&<p style={{fontSize:12,color:C.light,marginTop:8}}>설정에서 API 키를 먼저 입력해주세요.</p>}
+      {!apiKey&&<p style={{fontSize:12,color:C.light}}>설정에서 API 키를 먼저 입력해주세요.</p>}
       {report&&report.raw&&(
-        <div style={{background:"#FDF0EE",borderRadius:8,padding:"10px 14px",marginTop:8}}>
+        <div style={{background:"#FDF0EE",borderRadius:8,padding:"10px 14px",marginBottom:10}}>
           <div style={{fontSize:11,fontWeight:700,color:C.danger,marginBottom:4}}>오류 또는 원문</div>
           <p style={{fontSize:12,color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{report.raw}</p>
         </div>
       )}
       {report&&!report.raw&&(
-        <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:4}}>
-          {report.yesterday_summary&&(
-            <div style={{background:C.alt,borderRadius:8,padding:"10px 14px"}}>
-              <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:3}}>어제 흐름</div>
-              <p style={{fontSize:13,color:C.text,lineHeight:1.6}}>{report.yesterday_summary}</p>
-            </div>
-          )}
-          {report.today_outlook&&(
-            <div>
-              <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:3}}>오늘 예측</div>
-              <p style={{fontSize:13,color:C.text,lineHeight:1.6}}>{report.today_outlook}</p>
-            </div>
-          )}
-          {report.today_coaching&&(
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {report.highlight&&(
             <div style={{background:"#EFF7F1",borderRadius:8,padding:"10px 14px"}}>
-              <div style={{fontSize:11,fontWeight:700,color:C.ok,marginBottom:3}}>오늘 코칭 방향</div>
-              <p style={{fontSize:13,color:C.text,lineHeight:1.6}}>{report.today_coaching}</p>
+              <div style={{fontSize:11,fontWeight:700,color:C.ok,marginBottom:4}}>이번 주 잘한 점</div>
+              <p style={{fontSize:13,color:C.text}}>{report.highlight}</p>
             </div>
           )}
-          {report.phase_note&&(
-            <div style={{background:"#FFE8EE",borderRadius:8,padding:"10px 14px"}}>
-              <div style={{fontSize:11,fontWeight:700,color:C.female,marginBottom:3}}>생리 주기 참고</div>
-              <p style={{fontSize:13,color:C.text,lineHeight:1.6}}>{report.phase_note}</p>
-            </div>
-          )}
+          {[["식욕 안정 패턴","appetite_pattern"],["포만감 추이","satiety_trend"],
+            ...((member.gender==="female"&&member.hasPeriod)?[["생리 주기 연관성","period_relation"]]:[]),
+            ["수면 연관성","sleep_relation"],["운동 일관성","exercise_consistency"],
+            ["다음 주 코칭 참고","coach_suggestion"]
+          ].map(function(pair){
+            var l=pair[0],k=pair[1];
+            return report[k]?(
+              <div key={k}>
+                <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:3}}>{l}</div>
+                <p style={{fontSize:13,color:C.text,lineHeight:1.6}}>{report[k]}</p>
+              </div>
+            ):null;
+          })}
         </div>
       )}
     </Card>
@@ -1088,15 +1112,21 @@ function DailyAIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
       +(member.hasPeriod&&todayPhase?"\n- phase_note: 오늘 생리 위상 관련 코칭 한 줄":"")
       +"\n\n반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트 없이:\n"+jsonSchema;
 
-    var r=await callGemini(apiKey,prompt,geminiModel||DEFAULT_MODEL);
-    setReport(r);setGenning(false);
+    try{
+      var r=await callGemini(apiKey,prompt,geminiModel||DEFAULT_MODEL);
+      setReport(r);
+    }catch(e){
+      setReport({raw:"오류: "+e.message});
+    }finally{
+      setGenning(false);
+    }
   };
 
   return(
     <Card style={{border:"1.5px solid "+C.accent+"80"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:report?12:0}}>
         <div style={{fontWeight:700,fontSize:13,color:C.accent}}>
-          오늘의 코칭 브리핑 <span style={{fontSize:11,fontWeight:400,color:C.light}}>({TODAY})</span>
+          🌅 오늘의 코칭 브리핑 <span style={{fontSize:11,fontWeight:400,color:C.light}}>({TODAY})</span>
         </div>
         <Btn size="sm" variant="outline" onClick={genReport} disabled={genning||!apiKey}
           style={{borderColor:C.accent,color:C.accent}}>
@@ -1370,6 +1400,11 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
     setSaving(true);
     var updated=members.filter(function(m){return m.id!==id;});
     await apiSaveMembers(updated);
+    // periods 고아 데이터 삭제
+    var periodRows=await sheetGet("periods");
+    for(var i=periodRows.length-1;i>=0;i--){
+      if(String(periodRows[i][0])===id) await sheetDelete("periods",i+1);
+    }
     setMembers(updated);setDelId(null);setSaving(false);
   };
 
