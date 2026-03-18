@@ -1,4 +1,4 @@
-<!-- DietDesign v40 -->
+<!-- DietDesign v47 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -90,25 +90,20 @@ const DEFAULT_PROMPT=[
 
 // ── API ───────────────────────────────────────────────────────────────────────
 async function sheetGet(sheet){
-  try{
-    const r=await fetch(SCRIPT_URL+"?sheet="+encodeURIComponent(sheet));
-    const d=await r.json();
-    return d.data||[];
-  }catch{return [];}
+  const r=await fetch(SCRIPT_URL+"?sheet="+encodeURIComponent(sheet));
+  if(!r.ok) throw new Error("sheetGet 실패: HTTP "+r.status);
+  const d=await r.json();
+  return d.data||[];
 }
 
 async function sheetWrite(sheet,row,values){
-  try{
-    await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify({action:"write",sheet,row,values})});
-    return true;
-  }catch{return false;}
+  const res=await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify({action:"write",sheet,row,values})});
+  if(!res.ok) throw new Error("sheetWrite 실패: HTTP "+res.status);
 }
 
 async function sheetDelete(sheet,row){
-  try{
-    await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify({action:"delete",sheet,row})});
-    return true;
-  }catch{return false;}
+  const res=await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify({action:"delete",sheet,row})});
+  if(!res.ok) throw new Error("sheetDelete 실패: HTTP "+res.status);
 }
 
 async function apiLoadMembers(){
@@ -128,7 +123,6 @@ async function apiSaveMembers(members){
     await sheetWrite("members",i+1,[m.id,m.name,m.gender,m.age,m.goal,m.startWeight,m.targetWeight,m.pin,m.memo,m.hasPeriod?"true":"false"]);
   }
 }
-
 
 async function apiLoadPeriods(memberId){
   const rows=await sheetGet("periods");
@@ -222,17 +216,13 @@ async function callGemini(apiKey,prompt,model){
   }
 }
 
-async function callGeminiChat(apiKey,model,contents){
-  // contents: [{role:"user"|"model", parts:[{text:"..."}]}, ...]
-  // 최근 10턴(20개 메시지)만 유지, 단 첫 번째(시스템 컨텍스트)는 항상 포함
-  var trimmed=contents;
-  if(contents.length>21){
-    trimmed=[contents[0]].concat(contents.slice(-(20)));
-  }
+async function callGeminiChat(apiKey,model,systemContext,contents){
+  var trimmed=contents.length>20?contents.slice(-20):contents;
   try{
     const body={
+      system_instruction:{parts:[{text:systemContext}]},
       contents:trimmed,
-      generationConfig:{temperature:0.7,maxOutputTokens:1024}
+      generationConfig:{temperature:0.7,maxOutputTokens:2048}
     };
     const url="https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent?key="+apiKey;
     const res=await fetch(url,{
@@ -250,8 +240,6 @@ async function callGeminiChat(apiKey,model,contents){
     return "네트워크 오류: "+e.message;
   }
 }
-
-
 
 // ── 공통 UI ───────────────────────────────────────────────────────────────────
 const inputStyle={
@@ -459,7 +447,6 @@ function PeriodStartButton({memberId,date}){
   );
 }
 
-
 function PeriodAddInput({memberId,periods,setPeriods}){
   const [date,setDate]=useState("");
   const [saving,setSaving]=useState(false);
@@ -503,26 +490,21 @@ function calcAvgCycle(sortedDates){
 }
 
 function getPeriodPhase(sortedDates,targetDate){
-  // 가장 최근 시작일 기준으로 위상 계산
   if(!sortedDates||sortedDates.length===0)return null;
   var avgCycle=sortedDates.length>=2?calcAvgCycle(sortedDates):28;
   var target=new Date(targetDate);
 
-  // 가장 가까운 시작일 찾기 (과거 or 미래)
   var candidates=[];
   var last=new Date(sortedDates[sortedDates.length-1]);
-  // 과거 시작일들
   for(var i=sortedDates.length-1;i>=0;i--){
     candidates.push(new Date(sortedDates[i]));
   }
-  // 예상 미래 시작일들 (3개월치)
   for(var j=1;j<=3;j++){
     var future=new Date(last);
     future.setDate(future.getDate()+avgCycle*j);
     candidates.push(future);
   }
 
-  // target 이전 가장 최근 시작일 찾기
   var refStart=null;
   for(var k=0;k<candidates.length;k++){
     if(candidates[k]<=target){
@@ -531,11 +513,11 @@ function getPeriodPhase(sortedDates,targetDate){
   }
   if(!refStart)return null;
 
-  var dayNum=Math.round((target-refStart)/(1000*60*60*24))+1; // D+1 기준
-  if(dayNum<=5)return "period"; // 생리기
-  if(dayNum<=Math.round(avgCycle/2)-1)return "follicular"; // 난포기
-  if(dayNum<=Math.round(avgCycle/2)+1)return "ovulation"; // 배란기
-  if(dayNum<=avgCycle)return "luteal"; // 황체기
+  var dayNum=Math.round((target-refStart)/(1000*60*60*24))+1;
+  if(dayNum<=5)return "period";
+  if(dayNum<=Math.round(avgCycle/2)-1)return "follicular";
+  if(dayNum<=Math.round(avgCycle/2)+1)return "ovulation";
+  if(dayNum<=avgCycle)return "luteal";
   return null;
 }
 
@@ -563,6 +545,8 @@ function RecordForm({member,date,record,onSave,onDateChange}){
   const [memberComment,setMemberComment]=useState((record&&record.memberComment)||"");
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState(false);
+  const timerRef=useRef(null);
+  useEffect(function(){return function(){if(timerRef.current)clearTimeout(timerRef.current);};},[]); 
 
   const total=calcSleepTotal(sleepStart,sleepEnd);
 
@@ -580,7 +564,7 @@ function RecordForm({member,date,record,onSave,onDateChange}){
         memberComment:memberComment||null,
       });
       setSaved(true);
-      setTimeout(function(){setSaved(false);},2500);
+      timerRef.current=setTimeout(function(){setSaved(false);},2500);
     }catch(e){
       alert("저장 실패: "+e.message);
     }finally{
@@ -613,8 +597,8 @@ function RecordForm({member,date,record,onSave,onDateChange}){
       <Card>
         <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>신체 지표</div>
         <div className="form2col" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>체중 (kg)</div><KInput value={weight} onChange={setWeight} placeholder="예: 65.5" type="number"/></div>
-          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>허리 둘레 (cm)</div><KInput value={waist} onChange={setWaist} placeholder="예: 80" type="number"/></div>
+          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>체중 (아침, kg)</div><KInput value={weight} onChange={setWeight} placeholder="예: 65.5" type="number"/></div>
+          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>허리 둘레 (아침, cm)</div><KInput value={waist} onChange={setWaist} placeholder="예: 80" type="number"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>취침 시간</div><Sel value={sleepStart} onChange={setSleepStart} options={TIME_OPTS} placeholder="취침 시간 선택"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>기상 시간</div><Sel value={sleepEnd} onChange={setSleepEnd} options={TIME_OPTS} placeholder="기상 시간 선택"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>화장실 (횟수)</div><KInput value={toilet} onChange={setToilet} placeholder="예: 1" type="number"/></div>
@@ -761,7 +745,6 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
             <span style={{fontSize:9,color:C.warn}}>공{m.hungerBefore}</span>
             {" "}
             <span style={{fontSize:9,color:C.ok}}>포{m.satietyAfter}</span>
-
           </div>
         );
       }):null;
@@ -840,7 +823,7 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
             <tr>
               <td style={{padding:"8px 14px",fontSize:11,color:C.accent,fontWeight:600,
                 background:C.alt,verticalAlign:"top",position:"sticky",left:0,zIndex:1,
-                borderBottom:"1px solid "+C.border}}>코멘트</td>
+                borderBottom:"1px solid "+C.border}}>코멘트 (아침)</td>
               {dates.map(function(d){
                 return(
                   <td key={d} style={{padding:"5px 4px",verticalAlign:"top",
@@ -882,7 +865,7 @@ function WeightChart({member,records,dates}){
   var wts=weightDates.map(function(d){return records[d].weight;});
   var rawMin=Math.min.apply(null,wts),rawMax=Math.max.apply(null,wts);
   var minW=rawMin-1,maxW=rawMax+1;
-  if(maxW===minW)maxW=minW+2; // 모든 체중이 같을 때 division by zero 방지
+  if(maxW===minW)maxW=minW+2;
   var W=560,H=120,pL=36,pR=10,pT=10,pB=22;
   var xp=function(i){return pL+i*(W-pL-pR)/(weightDates.length-1);};
   var yp=function(v){return pT+(H-pT-pB)*(1-(v-minW)/(maxW-minW));};
@@ -954,7 +937,10 @@ function MemberHome({member,records,onSave}){
   const [viewMode,setViewMode]=useState("weekly");
   const [monthYear,setMonthYear]=useState({year:now.getFullYear(),month:now.getMonth()+1});
   const [periods,setPeriods]=useState([]);
-  useEffect(function(){if(member.hasPeriod)apiLoadPeriods(member.id).then(setPeriods);},[member.id]);
+  useEffect(function(){
+    if(member.hasPeriod)
+      apiLoadPeriods(member.id).then(setPeriods).catch(function(e){console.error("생리 주기 로드 실패:",e);});
+  },[member.id]);
 
   var weekDates=getLast7Days();
   var monthDates=getDatesOfMonth(monthYear.year,monthYear.month);
@@ -1205,7 +1191,7 @@ function DailyAIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
 
 // ── 코치 AI 채팅 ──────────────────────────────────────────────────────────────
 function CoachChat({member,records,apiKey,geminiModel,coachPrompt,periods}){
-  const [messages,setMessages]=useState([]); // {role:"user"|"model", text:""}
+  const [messages,setMessages]=useState([]);
   const [input,setInput]=useState("");
   const [sending,setSending]=useState(false);
   const bottomRef=useRef(null);
@@ -1243,7 +1229,7 @@ function CoachChat({member,records,apiKey,geminiModel,coachPrompt,periods}){
       +"\n특이사항: "+member.memo
       +(periodInfo?"\n"+periodInfo:"")
       +"\n\n[최근 7일 기록]\n"+JSON.stringify(recentData)
-      +"\n\n코치가 이 회원에 대해 질문하면 위 데이터를 바탕으로 코칭 관점에서 자연스럽게 대화해주세요. JSON 형식 없이 자유롭게 답변하세요.";
+      +"\n\n코치가 이 회원에 대해 질문하면 위 데이터를 바탕으로 코칭 관점에서 자연스럽게 대화해주세요. JSON 형식 없이 자유롭게 답변하세요. 마크다운 문법(**굵게**, ## 제목 등)은 절대 사용하지 마세요. 일반 텍스트로만 답변하세요.";
   };
 
   var send=async function(){
@@ -1257,24 +1243,13 @@ function CoachChat({member,records,apiKey,geminiModel,coachPrompt,periods}){
     var newMessages=messages.concat([{role:"user",text:userText}]);
     setMessages(newMessages);
 
-    // contents 배열 구성: 첫 번째는 항상 컨텍스트 포함한 user 메시지
     var ctx=buildContext();
-    var contents;
-    if(newMessages.length===1){
-      contents=[{role:"user",parts:[{text:ctx+"\n\n코치 질문: "+userText}]}];
-    }else{
-      var history=[{role:"user",parts:[{text:ctx+"\n\n코치 질문: "+newMessages[0].text}]}];
-      for(var i=1;i<newMessages.length;i++){
-        history.push({
-          role:newMessages[i].role==="user"?"user":"model",
-          parts:[{text:newMessages[i].text}]
-        });
-      }
-      contents=history;
-    }
+    var contents=newMessages.map(function(m){
+      return{role:m.role==="user"?"user":"model",parts:[{text:m.text}]};
+    });
 
     try{
-      var reply=await callGeminiChat(apiKey,geminiModel||DEFAULT_MODEL,contents);
+      var reply=await callGeminiChat(apiKey,geminiModel||DEFAULT_MODEL,ctx,contents);
       setMessages(function(p){return p.concat([{role:"model",text:reply}]);});
     }catch(e){
       setMessages(function(p){return p.concat([{role:"model",text:"오류: "+e.message}]);});
@@ -1366,9 +1341,14 @@ function MemberDetailView({member,records,onUpdate,apiKey,geminiModel,coachPromp
                 <div key={d} style={{display:"flex",alignItems:"center",gap:4,
                   background:"#FFE8EE",borderRadius:20,padding:"4px 12px"}}>
                   <span style={{fontSize:12,color:C.female,fontWeight:600}}>{d}</span>
+                  {/* FIX(버그2): try/catch 추가 - 삭제 실패 시 사용자에게 알림 */}
                   <button onClick={async function(){
-                    await apiDeletePeriod(member.id,d);
-                    setPeriods&&setPeriods(function(p){return p.filter(function(x){return x!==d;});});
+                    try{
+                      await apiDeletePeriod(member.id,d);
+                      setPeriods&&setPeriods(function(p){return p.filter(function(x){return x!==d;});});
+                    }catch(e){
+                      alert("삭제 실패: "+e.message);
+                    }
                   }} style={{background:"none",border:"none",cursor:"pointer",color:C.female,fontSize:14,lineHeight:1,padding:0}}>x</button>
                 </div>
               );
@@ -1524,7 +1504,6 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
   const [promptDraft,setPromptDraft]=useState(coachPrompt);
   const [apiDraft,setApiDraft]=useState("");
   const [modelDraft,setModelDraft]=useState(geminiModel);
-
   const [periods,setPeriods]=useState([]);
 
   var member=members.find(function(m){return m.id===selected;});
@@ -1532,16 +1511,21 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
 
   var selectMember=async function(id){
     setSelected(id);setLoading(true);
-    var member=members.find(function(m){return m.id===id;});
-    var recs=await apiLoadRecords(id);
-    setAllRecords(function(p){return Object.assign({},p,{[id]:recs});});
-    if(member&&member.hasPeriod){
-      var p=await apiLoadPeriods(id);
-      setPeriods(p);
-    }else{
-      setPeriods([]);
+    try{
+      var member=members.find(function(m){return m.id===id;});
+      var recs=await apiLoadRecords(id);
+      setAllRecords(function(p){return Object.assign({},p,{[id]:recs});});
+      if(member&&member.hasPeriod){
+        var p=await apiLoadPeriods(id);
+        setPeriods(p);
+      }else{
+        setPeriods([]);
+      }
+    }catch(e){
+      console.error("회원 데이터 로드 실패:",e);
+    }finally{
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   var updateRecord=async function(date,rec){
@@ -1563,20 +1547,39 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
     }else{
       updated=members.concat([Object.assign({},draft,{id:"m"+Date.now(),age:Number(draft.age),startWeight:Number(draft.startWeight),targetWeight:Number(draft.targetWeight)})]);
     }
-    await apiSaveMembers(updated);
-    setMembers(updated);setShowMemberForm(false);setEditingMember(null);setSaving(false);
+    try{
+      await apiSaveMembers(updated);
+      setMembers(updated);setShowMemberForm(false);setEditingMember(null);
+    }catch(e){
+      alert("저장 실패: "+e.message);
+    }finally{
+      setSaving(false);
+    }
   };
 
+  // FIX(버그4): setMembers를 periods 루프보다 먼저 호출
+  // periods 삭제는 best-effort - 실패해도 회원 삭제는 완료된 것으로 처리
   var deleteMember=async function(id){
     setSaving(true);
     var updated=members.filter(function(m){return m.id!==id;});
-    await apiSaveMembers(updated);
-    // periods 고아 데이터 삭제
-    var periodRows=await sheetGet("periods");
-    for(var i=periodRows.length-1;i>=0;i--){
-      if(String(periodRows[i][0])===id) await sheetDelete("periods",i+1);
+    try{
+      await apiSaveMembers(updated);
+      setMembers(updated);setDelId(null);
+    }catch(e){
+      alert("회원 삭제 실패: "+e.message);
+      return;
+    }finally{
+      setSaving(false);
     }
-    setMembers(updated);setDelId(null);setSaving(false);
+    // periods 고아 데이터 삭제는 best-effort
+    try{
+      var periodRows=await sheetGet("periods");
+      for(var i=periodRows.length-1;i>=0;i--){
+        if(String(periodRows[i][0])===id) await sheetDelete("periods",i+1);
+      }
+    }catch(e){
+      console.warn("periods 고아 데이터 삭제 실패 (무시):",e);
+    }
   };
 
   return(
@@ -1715,7 +1718,7 @@ function Login({onLogin,loading}){
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
             <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>비밀번호</div><KInput value={cpw} onChange={setCpw} placeholder="코치 비밀번호" type="password"/></div>
             {cerr&&<p style={{color:C.danger,fontSize:12}}>{cerr}</p>}
-            <Btn full onClick={function(){cpw===COACH_PW?onLogin("coach"):setCerr("비밀번호가 올바르지 않습니다.");}} style={{marginTop:4,padding:14}}>접속</Btn>
+            <Btn full onClick={function(){cpw===COACH_PW?onLogin("coach",null,null,setCerr):setCerr("비밀번호가 올바르지 않습니다.");}} style={{marginTop:4,padding:14}}>접속</Btn>
           </div>
         </div>
       )}
@@ -1734,22 +1737,35 @@ function App(){
   const [geminiModel,setGeminiModel]=useState(function(){return localStorage.getItem("dd_model")||DEFAULT_MODEL;});
   const [coachPrompt,setCoachPrompt]=useState(DEFAULT_PROMPT);
 
-  useEffect(function(){apiLoadMembers().then(function(m){setMembers(m);setLoading(false);});},[]);
+  useEffect(function(){
+    apiLoadMembers()
+      .then(function(m){setMembers(m);})
+      .catch(function(e){console.error("회원 목록 로드 실패:",e);alert("데이터를 불러오지 못했어요. 새로고침해 주세요.");})
+      .finally(function(){setLoading(false);});
+  },[]);
 
   var handleLogin=async function(role,name,pin,setErr){
     if(role==="coach"){
-      setSession({role:"coach"});
-      var ms=await apiLoadMembers();
-      setMembers(ms);
-      var recs=await apiLoadAllRecords(ms.map(function(m){return m.id;}));
-      setAllRecords(recs);
+      try{
+        var ms=await apiLoadMembers();
+        var recs=await apiLoadAllRecords(ms.map(function(m){return m.id;}));
+        setMembers(ms);
+        setAllRecords(recs);
+        setSession({role:"coach"});
+      }catch(e){
+        if(setErr)setErr("데이터 로드 실패: "+e.message);
+      }
       return;
     }
     var m=members.find(function(m){return m.name===name&&m.pin===pin;});
     if(!m){if(setErr)setErr("이름 또는 PIN이 올바르지 않습니다.");return;}
-    var recs=await apiLoadRecords(m.id);
-    setMemberRecords(recs);
-    setSession({role:"member",member:m});
+    try{
+      var recs=await apiLoadRecords(m.id);
+      setMemberRecords(recs);
+      setSession({role:"member",member:m});
+    }catch(e){
+      if(setErr)setErr("데이터 로드 실패: "+e.message);
+    }
   };
 
   var saveMyRecord=async function(date,rec){
