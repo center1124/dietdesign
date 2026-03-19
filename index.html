@@ -1,4 +1,4 @@
-<!-- DietDesign v49 -->
+<!-- DietDesign v50 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -601,8 +601,30 @@ function RecordForm({member,date,record,onSave,onDateChange}){
         <div className="form2col" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>체중 (아침, kg)</div><KInput value={weight} onChange={setWeight} placeholder="예: 65.5" type="number"/></div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>허리 둘레 (아침, cm)</div><KInput value={waist} onChange={setWaist} placeholder="예: 80" type="number"/></div>
-          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>취침 시간</div><Sel value={sleepStart} onChange={setSleepStart} options={TIME_OPTS} placeholder="취침 시간 선택"/></div>
-          <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>기상 시간</div><Sel value={sleepEnd} onChange={setSleepEnd} options={TIME_OPTS} placeholder="기상 시간 선택"/></div>
+          <div style={{gridColumn:"1/-1"}}>
+            <div style={{fontSize:12,color:C.mid,marginBottom:6,fontWeight:600}}>취침 시간</div>
+            <div className="scrollx" style={{display:"flex",gap:6,paddingBottom:4}}>
+              {["20:00","20:30","21:00","21:30","22:00","22:30","23:00","23:30","00:00","00:30","01:00","01:30","02:00","02:30","03:00"].map(function(t){
+                var on=sleepStart===t;
+                return<button key={t} onClick={function(){setSleepStart(on?"":t);}}
+                  style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:"1.5px solid "+(on?C.accent:C.border),
+                    background:on?C.accent:"transparent",color:on?"#fff":C.mid,
+                    fontSize:12,fontWeight:on?700:400,cursor:"pointer",whiteSpace:"nowrap"}}>{t}</button>;
+              })}
+            </div>
+          </div>
+          <div style={{gridColumn:"1/-1"}}>
+            <div style={{fontSize:12,color:C.mid,marginBottom:6,fontWeight:600}}>기상 시간</div>
+            <div className="scrollx" style={{display:"flex",gap:6,paddingBottom:4}}>
+              {["04:00","04:30","05:00","05:30","06:00","06:30","07:00","07:30","08:00","08:30","09:00","09:30","10:00","10:30","11:00"].map(function(t){
+                var on=sleepEnd===t;
+                return<button key={t} onClick={function(){setSleepEnd(on?"":t);}}
+                  style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:"1.5px solid "+(on?C.accent:C.border),
+                    background:on?C.accent:"transparent",color:on?"#fff":C.mid,
+                    fontSize:12,fontWeight:on?700:400,cursor:"pointer",whiteSpace:"nowrap"}}>{t}</button>;
+              })}
+            </div>
+          </div>
           <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>화장실 (횟수)</div><KInput value={toilet} onChange={setToilet} placeholder="예: 1" type="number"/></div>
           {member.hasPeriod&&(
             <div style={{gridColumn:"1/-1"}}>
