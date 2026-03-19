@@ -1,4 +1,4 @@
-<!-- DietDesign v48 -->
+<!-- DietDesign v49 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -112,8 +112,8 @@ async function apiLoadMembers(){
   const rows=await sheetGet("members");
   return rows.filter(r=>r[0]).map(r=>({
     id:String(r[0]),name:String(r[1]),gender:String(r[2]),
-    age:Number(r[3]),goal:String(r[4]||""),
-    startWeight:Number(r[5]),targetWeight:Number(r[6]),
+    age:parseInt(r[3])||0,goal:String(r[4]||""),
+    startWeight:parseFloat(r[5])||0,targetWeight:parseFloat(r[6])||0,
     pin:String(r[7]),memo:String(r[8]||""),
     hasPeriod:r[9]==="true"||r[9]===true,
   }));
@@ -122,7 +122,7 @@ async function apiLoadMembers(){
 async function apiSaveMembers(members){
   for(let i=0;i<members.length;i++){
     const m=members[i];
-    await sheetWrite("members",i+1,[m.id,m.name,m.gender,m.age,m.goal,m.startWeight,m.targetWeight,m.pin,m.memo,m.hasPeriod?"true":"false"]);
+    await sheetWrite("members",i+1,[m.id,m.name,m.gender,String(m.age),m.goal,m.startWeight,m.targetWeight,m.pin,m.memo,m.hasPeriod?"true":"false"]);
   }
 }
 
@@ -761,7 +761,7 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
   },[dates]);
 
   return(
-    <Card style={{padding:0,overflow:"hidden"}}>
+    <Card style={{padding:0,overflow:"auto"}}>
       <div className="scrollx" ref={scrollRef}>
         <table style={{width:"100%",borderCollapse:"collapse",minWidth:60+dates.length*110}}>
           <thead>
