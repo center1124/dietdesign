@@ -1,4 +1,4 @@
-<!-- DietDesign v51 -->
+<!-- DietDesign v52 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -112,7 +112,7 @@ async function apiLoadMembers(){
   const rows=await sheetGet("members");
   return rows.filter(r=>r[0]).map(r=>({
     id:String(r[0]),name:String(r[1]),gender:String(r[2]),
-    age:parseInt(r[3])||0,goal:String(r[4]||""),
+    age:(function(v){var n=parseInt(v)||0;return(n>=1&&n<=120)?n:0;})(r[3]),goal:String(r[4]||""),
     startWeight:parseFloat(r[5])||0,targetWeight:parseFloat(r[6])||0,
     pin:String(r[7]),memo:String(r[8]||""),
     hasPeriod:r[9]==="true"||r[9]===true,
@@ -1502,7 +1502,7 @@ function MemberForm({initial,onSave,onCancel,saving}){
             <option value="female">여성</option><option value="male">남성</option>
           </select>
         </div>
-        <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>나이</div><KInput value={d.age} onChange={f("age")} placeholder="34" type="number"/></div>
+        <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>출생연도</div><KInput value={d.age} onChange={f("age")} placeholder="1990" type="number"/></div>
         <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>현재 체중 (kg)</div><KInput value={d.startWeight} onChange={f("startWeight")} placeholder="65" type="number"/></div>
         <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>목표 체중 (kg)</div><KInput value={d.targetWeight} onChange={f("targetWeight")} placeholder="58" type="number"/></div>
       </div>
@@ -1570,14 +1570,16 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
 
   var saveMember=async function(draft){
     if(!draft.name||!draft.pin){alert("이름과 PIN은 필수입니다.");return;}
+    var birthYear=parseInt(draft.age)||0;
+    var calcAge=birthYear>1900?new Date().getFullYear()-birthYear:birthYear;
     setSaving(true);
     var updated;
     if(editingMember){
       updated=members.map(function(m){
-        return m.id===editingMember.id?Object.assign({},m,draft,{age:Number(draft.age),startWeight:Number(draft.startWeight),targetWeight:Number(draft.targetWeight)}):m;
+        return m.id===editingMember.id?Object.assign({},m,draft,{age:calcAge,startWeight:Number(draft.startWeight),targetWeight:Number(draft.targetWeight)}):m;
       });
     }else{
-      updated=members.concat([Object.assign({},draft,{id:"m"+Date.now(),age:Number(draft.age),startWeight:Number(draft.startWeight),targetWeight:Number(draft.targetWeight)})]);
+      updated=members.concat([Object.assign({},draft,{id:"m"+Date.now(),age:calcAge,startWeight:Number(draft.startWeight),targetWeight:Number(draft.targetWeight)})]);
     }
     try{
       await apiSaveMembers(updated);
@@ -1682,7 +1684,7 @@ function CoachDashboard({members,setMembers,allRecords,setAllRecords,apiKey,setA
 
       {showMemberForm&&(
         <MemberForm
-          initial={editingMember?Object.assign({},editingMember,{age:String(editingMember.age),startWeight:String(editingMember.startWeight),targetWeight:String(editingMember.targetWeight)}):undefined}
+          initial={editingMember?Object.assign({},editingMember,{age:String(editingMember.age>1900?editingMember.age:new Date().getFullYear()-editingMember.age),startWeight:String(editingMember.startWeight),targetWeight:String(editingMember.targetWeight)}):undefined}
           onSave={saveMember} onCancel={function(){setShowMemberForm(false);setEditingMember(null);}} saving={saving}/>
       )}
 
