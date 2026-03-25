@@ -1,4 +1,4 @@
-<!-- DietDesign v53 -->
+<!-- DietDesign v54 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -369,7 +369,8 @@ function MealForm({initial,onSave,onCancel,label}){
   const [time,setTime]=useState((initial&&initial.time)||"");
   const [food,setFood]=useState((initial&&initial.food)||"");
   const [hunger,setHunger]=useState((initial&&initial.hungerBefore)||5);
-  const [satiety,setSatiety]=useState((initial&&initial.satietyAfter)||7);
+  const [eatMins,setEatMins]=useState((initial&&initial.eatMinutes)||15);
+  const [chew,setChew]=useState((initial&&initial.chewScore)||3);
 
   return(
     <div style={{background:C.alt,borderRadius:10,padding:14,border:"1px solid "+C.border,marginBottom:10}}>
@@ -379,10 +380,23 @@ function MealForm({initial,onSave,onCancel,label}){
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
         <Slider label="식전 공복감" value={hunger} onChange={setHunger}/>
-        <Slider label="식후 포만감" value={satiety} onChange={setSatiety}/>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:12,color:C.mid,minWidth:72}}>식사시간</span>
+          <input type="range" min={5} max={60} step={5} value={eatMins}
+            onChange={function(e){setEatMins(Number(e.target.value));}}
+            style={{flex:1,accentColor:C.accent}}/>
+          <span style={{fontSize:14,fontWeight:800,color:C.accent,minWidth:36,textAlign:"right"}}>{eatMins}분</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:12,color:C.mid,minWidth:72}}>씹기</span>
+          <input type="range" min={0} max={5} step={1} value={chew}
+            onChange={function(e){setChew(Number(e.target.value));}}
+            style={{flex:1,accentColor:C.accent}}/>
+          <span style={{fontSize:14,fontWeight:800,color:C.accent,minWidth:18,textAlign:"right"}}>{chew}</span>
+        </div>
       </div>
       <div style={{display:"flex",gap:8}}>
-        <Btn size="sm" onClick={()=>{if(!food.trim())return;onSave({time,food,hungerBefore:hunger,satietyAfter:satiety});}}>{label||"추가"}</Btn>
+        <Btn size="sm" onClick={()=>{if(!food.trim())return;onSave({time,food,hungerBefore:hunger,eatMinutes:eatMins,chewScore:chew});}}>{label||"추가"}</Btn>
         <Btn size="sm" variant="ghost" onClick={onCancel}>취소</Btn>
       </div>
     </div>
@@ -673,7 +687,8 @@ function RecordForm({member,date,record,onSave,onDateChange}){
                       <div style={{fontSize:13,fontWeight:600,margin:"3px 0 5px"}}>{m.food}</div>
                       <div style={{display:"flex",gap:10}}>
                         <span style={{fontSize:11,color:C.mid}}>공복 <b style={{color:C.warn}}>{m.hungerBefore}</b></span>
-                        <span style={{fontSize:11,color:C.mid}}>포만 <b style={{color:C.ok}}>{m.satietyAfter}</b></span>
+                        {m.eatMinutes&&<span style={{fontSize:11,color:C.mid}}>{m.eatMinutes}분</span>}
+                        {m.chewScore!=null&&<span style={{fontSize:11,color:C.mid}}>씹기 <b style={{color:C.ok}}>{m.chewScore}</b></span>}
                       </div>
                     </div>
                   </div>
@@ -781,8 +796,8 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
             <div style={{fontSize:9,color:C.light}}>{m.time}</div>
             <div style={{fontSize:9,color:C.text,wordBreak:"break-all"}}>{m.food}</div>
             <span style={{fontSize:9,color:C.warn}}>공{m.hungerBefore}</span>
-            {" "}
-            <span style={{fontSize:9,color:C.ok}}>포{m.satietyAfter}</span>
+            {m.eatMinutes&&<span style={{fontSize:9,color:C.mid}}> {m.eatMinutes}분</span>}
+            {m.chewScore!=null&&<span style={{fontSize:9,color:C.ok}}> 씹{m.chewScore}</span>}
           </div>
         );
       }):null;
@@ -1033,15 +1048,15 @@ function AIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
       var phase=member.hasPeriod&&periods&&periods.length?getPeriodPhase(periods,d):null;
       return{date:d,weight:r.weight,sleep:r.sleep&&r.sleep.total,
         periodPhase:phase?PHASE_COLORS[phase].label:null,
-        meals:r.meals&&r.meals.map(function(m){return{food:m.food,hunger:m.hungerBefore,satiety:m.satietyAfter};}),
+        meals:r.meals&&r.meals.map(function(m){return{food:m.food,hunger:m.hungerBefore,eatMinutes:m.eatMinutes,chewScore:m.chewScore};}),
         exercise:r.exercise&&r.exercise.map(function(e){return{time:e.time,note:e.note};}),
         memberComment:r.memberComment||null,
         coachComment:r.coachComment||null};
     }).filter(Boolean);
 
     var jsonSchema=(member.gender==="female"&&member.hasPeriod)
-      ?'{"appetite_pattern":"","satiety_trend":"","period_relation":"","sleep_relation":"","exercise_consistency":"","coach_suggestion":"","highlight":""}'
-      :'{"appetite_pattern":"","satiety_trend":"","sleep_relation":"","exercise_consistency":"","coach_suggestion":"","highlight":""}';
+      ?'{"appetite_pattern":"","chew_trend":"","period_relation":"","sleep_relation":"","exercise_consistency":"","coach_suggestion":"","highlight":""}'
+      :'{"appetite_pattern":"","chew_trend":"","sleep_relation":"","exercise_consistency":"","coach_suggestion":"","highlight":""}';
 
     var periodInfo=member.hasPeriod&&periods&&periods.length
       ?"\n생리 주기 정보: 최근 시작일 "+periods.slice(-3).join(", ")
@@ -1090,7 +1105,7 @@ function AIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
               <p style={{fontSize:13,color:C.text}}>{report.highlight}</p>
             </div>
           )}
-          {[["식욕 안정 패턴","appetite_pattern"],["포만감 추이","satiety_trend"],
+          {[["식욕 안정 패턴","appetite_pattern"],["씹기 & 식사속도 추이","chew_trend"],
             ...((member.gender==="female"&&member.hasPeriod)?[["생리 주기 연관성","period_relation"]]:[]),
             ["수면 연관성","sleep_relation"],["운동 일관성","exercise_consistency"],
             ["다음 주 코칭 참고","coach_suggestion"]
@@ -1126,10 +1141,10 @@ function DailyAIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
     var last7=getLast7Days();
     var recentSummary=last7.map(function(d){
       var r=records[d];if(!r)return null;
-      var avgSat=r.meals&&r.meals.length
-        ?(r.meals.reduce(function(s,m){return s+(m.satietyAfter||0);},0)/r.meals.length).toFixed(1)
+      var avgChew=r.meals&&r.meals.length
+        ?(r.meals.reduce(function(s,m){return s+(m.chewScore||0);},0)/r.meals.length).toFixed(1)
         :null;
-      return{date:d,weight:r.weight||null,sleep:r.sleep&&r.sleep.total||null,avgSatiety:avgSat};
+      return{date:d,weight:r.weight||null,sleep:r.sleep&&r.sleep.total||null,avgChew:avgChew};
     }).filter(Boolean);
 
     var yd=records[yesterday];
@@ -1137,7 +1152,7 @@ function DailyAIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
       date:yesterday,
       weight:yd.weight,
       sleep:yd.sleep&&yd.sleep.total,
-      meals:yd.meals&&yd.meals.map(function(m){return{time:m.time,food:m.food,hunger:m.hungerBefore,satiety:m.satietyAfter};}),
+      meals:yd.meals&&yd.meals.map(function(m){return{time:m.time,food:m.food,hunger:m.hungerBefore,eatMinutes:m.eatMinutes,chewScore:m.chewScore};}),
       exercise:yd.exercise&&yd.exercise.map(function(e){return{time:e.time,note:e.note};}),
       memberComment:yd.memberComment||null,
     }:null;
@@ -1243,10 +1258,10 @@ function CoachChat({member,records,apiKey,geminiModel,coachPrompt,periods}){
     var recentData=last7.map(function(d){
       var r=records[d];if(!r)return null;
       var phase=member.hasPeriod&&periods&&periods.length?getPeriodPhase(periods,d):null;
-      var avgSat=r.meals&&r.meals.length
-        ?(r.meals.reduce(function(s,m){return s+(m.satietyAfter||0);},0)/r.meals.length).toFixed(1):null;
+      var avgChew=r.meals&&r.meals.length
+        ?(r.meals.reduce(function(s,m){return s+(m.chewScore||0);},0)/r.meals.length).toFixed(1):null;
       return{date:d,weight:r.weight||null,sleep:r.sleep&&r.sleep.total||null,
-        avgSatiety:avgSat,
+        avgChew:avgChew,
         meals:r.meals&&r.meals.map(function(m){return m.food;}),
         exercise:r.exercise&&r.exercise.map(function(e){return e.note;}),
         memberComment:r.memberComment||null,
@@ -1421,10 +1436,10 @@ function MemberCard({member,records,onSelect,onEdit,onDelete,delId,setDelId}){
   var latestRec=latestDate?records[latestDate]:null;
   var weights=days7.map(function(d){return records[d]&&records[d].weight;}).filter(Boolean);
   var wDiff=weights.length>=2?(weights[weights.length-1]-weights[0]).toFixed(1):null;
-  var satVals=days7.slice(-3).reduce(function(acc,d){
-    return acc.concat((records[d]&&records[d].meals)?records[d].meals.map(function(m){return m.satietyAfter;}).filter(Boolean):[]);
+  var chewVals=days7.slice(-3).reduce(function(acc,d){
+    return acc.concat((records[d]&&records[d].meals)?records[d].meals.map(function(m){return m.chewScore;}).filter(function(v){return v!=null;}):[]);
   },[]);
-  var avgSat=satVals.length?(satVals.reduce(function(a,b){return a+b;},0)/satVals.length).toFixed(1):null;
+  var avgChew=chewVals.length?(chewVals.reduce(function(a,b){return a+b;},0)/chewVals.length).toFixed(1):null;
   var dots=days7.map(function(d){return !!records[d];});
 
   return(
@@ -1465,9 +1480,9 @@ function MemberCard({member,records,onSelect,onEdit,onDelete,delId,setDelId}){
             <div style={{fontSize:16,fontWeight:800,color:C.accent}}>{latestRec.weight}<span style={{fontSize:10,fontWeight:400}}>kg</span></div>
             {wDiff&&<div style={{fontSize:10,color:parseFloat(wDiff)>0?C.danger:C.ok}}>{parseFloat(wDiff)>0?"+":""}{wDiff}kg</div>}
           </div>}
-          {avgSat&&<div style={{padding:"4px 12px 4px 0",borderRight:"1px solid "+C.border,marginRight:12,marginBottom:6}}>
-            <div style={{fontSize:10,color:C.light}}>포만감 평균</div>
-            <div style={{fontSize:16,fontWeight:800,color:parseFloat(avgSat)>=7?C.ok:parseFloat(avgSat)>=4?C.warn:C.danger}}>{avgSat}</div>
+          {avgChew&&<div style={{padding:"4px 12px 4px 0",borderRight:"1px solid "+C.border,marginRight:12,marginBottom:6}}>
+            <div style={{fontSize:10,color:C.light}}>씹기 평균</div>
+            <div style={{fontSize:16,fontWeight:800,color:parseFloat(avgChew)>=4?C.ok:parseFloat(avgChew)>=2?C.warn:C.danger}}>{avgChew}</div>
             <div style={{fontSize:10,color:C.light}}>최근 3일</div>
           </div>}
         </div>
