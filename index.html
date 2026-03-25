@@ -1,4 +1,4 @@
-<!-- DietDesign v54 -->
+<!-- DietDesign v56 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -320,18 +320,6 @@ function Confirm({msg,onOk,onCancel}){
   );
 }
 
-function Slider({label,value,onChange}){
-  const color=value>=7?C.ok:value>=4?C.warn:C.danger;
-  return(
-    <div style={{display:"flex",alignItems:"center",gap:8}}>
-      <span style={{fontSize:12,color:C.mid,minWidth:72}}>{label}</span>
-      <input type="range" min={1} max={10} value={value}
-        onChange={e=>onChange(Number(e.target.value))} style={{flex:1,accentColor:color}}/>
-      <span style={{fontSize:14,fontWeight:800,color,minWidth:18,textAlign:"right"}}>{value}</span>
-    </div>
-  );
-}
-
 function calcSleepTotal(start,end){
   if(!start||!end)return "";
   const [sh,sm]=start.split(":").map(Number);
@@ -368,7 +356,6 @@ function SleepBar({start,end,total}){
 function MealForm({initial,onSave,onCancel,label}){
   const [time,setTime]=useState((initial&&initial.time)||"");
   const [food,setFood]=useState((initial&&initial.food)||"");
-  const [hunger,setHunger]=useState((initial&&initial.hungerBefore)||5);
   const [eatMins,setEatMins]=useState((initial&&initial.eatMinutes)||15);
   const [chew,setChew]=useState((initial&&initial.chewScore)||3);
 
@@ -379,7 +366,6 @@ function MealForm({initial,onSave,onCancel,label}){
         <div><div style={{fontSize:12,color:C.mid,marginBottom:4}}>먹은 음식</div><KInput value={food} onChange={setFood} placeholder="비빔밥, 된장국"/></div>
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
-        <Slider label="식전 공복감" value={hunger} onChange={setHunger}/>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <span style={{fontSize:12,color:C.mid,minWidth:72}}>식사시간</span>
           <input type="range" min={5} max={60} step={5} value={eatMins}
@@ -396,7 +382,7 @@ function MealForm({initial,onSave,onCancel,label}){
         </div>
       </div>
       <div style={{display:"flex",gap:8}}>
-        <Btn size="sm" onClick={()=>{if(!food.trim())return;onSave({time,food,hungerBefore:hunger,eatMinutes:eatMins,chewScore:chew});}}>{label||"추가"}</Btn>
+        <Btn size="sm" onClick={()=>{if(!food.trim())return;onSave({time,food,eatMinutes:eatMins,chewScore:chew});}}>{label||"추가"}</Btn>
         <Btn size="sm" variant="ghost" onClick={onCancel}>취소</Btn>
       </div>
     </div>
@@ -686,7 +672,6 @@ function RecordForm({member,date,record,onSave,onDateChange}){
                       <div style={{fontSize:11,color:C.light}}>{m.time}</div>
                       <div style={{fontSize:13,fontWeight:600,margin:"3px 0 5px"}}>{m.food}</div>
                       <div style={{display:"flex",gap:10}}>
-                        <span style={{fontSize:11,color:C.mid}}>공복 <b style={{color:C.warn}}>{m.hungerBefore}</b></span>
                         {m.eatMinutes&&<span style={{fontSize:11,color:C.mid}}>{m.eatMinutes}분</span>}
                         {m.chewScore!=null&&<span style={{fontSize:11,color:C.mid}}>씹기 <b style={{color:C.ok}}>{m.chewScore}</b></span>}
                       </div>
@@ -795,7 +780,6 @@ function RecordTable({member,records,dates,onUpdate,isReadOnly,periods}){
           <div key={i} style={{marginBottom:4,textAlign:"left"}}>
             <div style={{fontSize:9,color:C.light}}>{m.time}</div>
             <div style={{fontSize:9,color:C.text,wordBreak:"break-all"}}>{m.food}</div>
-            <span style={{fontSize:9,color:C.warn}}>공{m.hungerBefore}</span>
             {m.eatMinutes&&<span style={{fontSize:9,color:C.mid}}> {m.eatMinutes}분</span>}
             {m.chewScore!=null&&<span style={{fontSize:9,color:C.ok}}> 씹{m.chewScore}</span>}
           </div>
@@ -1048,7 +1032,7 @@ function AIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
       var phase=member.hasPeriod&&periods&&periods.length?getPeriodPhase(periods,d):null;
       return{date:d,weight:r.weight,sleep:r.sleep&&r.sleep.total,
         periodPhase:phase?PHASE_COLORS[phase].label:null,
-        meals:r.meals&&r.meals.map(function(m){return{food:m.food,hunger:m.hungerBefore,eatMinutes:m.eatMinutes,chewScore:m.chewScore};}),
+        meals:r.meals&&r.meals.map(function(m){return{food:m.food,eatMinutes:m.eatMinutes,chewScore:m.chewScore};}),
         exercise:r.exercise&&r.exercise.map(function(e){return{time:e.time,note:e.note};}),
         memberComment:r.memberComment||null,
         coachComment:r.coachComment||null};
@@ -1152,7 +1136,7 @@ function DailyAIReport({member,records,apiKey,geminiModel,coachPrompt,periods}){
       date:yesterday,
       weight:yd.weight,
       sleep:yd.sleep&&yd.sleep.total,
-      meals:yd.meals&&yd.meals.map(function(m){return{time:m.time,food:m.food,hunger:m.hungerBefore,eatMinutes:m.eatMinutes,chewScore:m.chewScore};}),
+      meals:yd.meals&&yd.meals.map(function(m){return{time:m.time,food:m.food,eatMinutes:m.eatMinutes,chewScore:m.chewScore};}),
       exercise:yd.exercise&&yd.exercise.map(function(e){return{time:e.time,note:e.note};}),
       memberComment:yd.memberComment||null,
     }:null;
